@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { BsCheckCircleFill } from "react-icons/bs";
 import { IoCloseCircleSharp } from "react-icons/io5";
 import { Link } from "react-router-dom";
-import { useWallet } from "@aptos-labs/wallet-adapter-react"
+import { useCasperWallet } from "../../providers/WalletProvider"
 
 // Type definitions
 interface SampleFormData {
@@ -369,10 +369,10 @@ const UploadUI: React.FC<UploadUIProps> = ({ platformFeePercentage = 10 }) => {
     isPending: isUploadingFile,
     uploadProgress: pinataProgress,
   } = useUploadFileToIPFS();
-  const { account } = useWallet();
+  const { account } = useCasperWallet();
 
   const handleUpload = async (): Promise<void> => {
-    if (!account?.address.toString()) {
+    if (!account?.address) {
       toast.error("Error", {
         className: "!bg-red-500 *:!text-white !border-0",
         description: <p className="text-white">Wallet not connected</p>,
@@ -399,12 +399,12 @@ const UploadUI: React.FC<UploadUIProps> = ({ platformFeePercentage = 10 }) => {
       }
 
       const response = await uploadSample({
-        price: BigInt(Number(formData.price) * 100_000_000),
+        price: BigInt(Number(formData.price) * 1_000_000_000), // CSPR has 9 decimals
         ipfs_link: audioLink ?? "",
         bpm: Number(formData.bpm),
         title: formData.title,
         genre: formData.genre,
-        seller:  account?.address.toString(),
+        seller: account?.address ?? "",
         cover_image: coverImageLink,
         video_preview_link: videoPreviewLink,
       });
@@ -568,7 +568,7 @@ const UploadUI: React.FC<UploadUIProps> = ({ platformFeePercentage = 10 }) => {
                         handleInputChange("price", e.target.value)
                       }
                     />
-                    <span className="price-currency">MOVE</span>
+                    <span className="price-currency">CSPR</span>
                   </div>
                   {errors.price && (
                     <div className="error-text">{errors.price}</div>
@@ -633,7 +633,7 @@ const UploadUI: React.FC<UploadUIProps> = ({ platformFeePercentage = 10 }) => {
                   </div>
                   <div className="stat-card">
                     <div className="stat-label">You Earn</div>
-                    <div className="stat-value">{calculateEarnings()} MOVE</div>
+                    <div className="stat-value">{calculateEarnings()} CSPR</div>
                   </div>
                 </div>
               </div>

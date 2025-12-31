@@ -80,7 +80,7 @@ export const About = () => {
           About <span className="text-primary font-pixter">SAMPLED</span>
         </p>
         <h2 className="max-w-[650px] text-lg md:text-2xl mt-4 md:mt-5 leading-[1.5] top-desc-3">
-          Upload your sample and set your price in MOVE. When a producer buys it,
+          Upload your sample and set your price in CSPR. When a producer buys it,
           you get 90% instantly. They get the file + commercial license
           immediately. No waiting for monthly payouts. No 50% platform fees.
           Just instant payments for your creativity.
@@ -139,7 +139,7 @@ export const About = () => {
 
       <div className="text-[8.85vmax] md:mt-0 mt-[4rem] opacity-[0.1] uppercase font-pixter font-bold desc-marquee">
         <Marquee speed={150}>
-          <p className="mr-10">Move</p>
+          <p className="mr-10">CSPR</p>
           <p className="mr-10">with</p>
           <p className="mr-10">creative</p>
           <p className="mr-10">culture.</p>

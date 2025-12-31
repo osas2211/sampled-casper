@@ -3,7 +3,7 @@ import { TbPlayerPlayFilled } from "react-icons/tb";
 import { Link } from "react-router-dom";
 import { ISample } from "../../@types/sample"
 import { truncateString } from "../../util/string-helpers";
-import { octasToMove } from "../../hooks/useSampledContract";
+import { motesToCspr } from "../../hooks/useSampledContract";
 
 interface propsI {
   sample: ISample;
@@ -31,7 +31,7 @@ export const SampleListCard = ({ sample, index }: propsI) => {
         <p className="text-sm md:block hidden">{sample?.total_sales} Sales</p>
         <div className="flex gap-2 items-center">
           <Avatar src={"/assets/images/casper-logo.png"} size={20} />
-          <p className="text-sm">{octasToMove(sample?.price)} MOVE</p>
+          <p className="text-sm">{motesToCspr(sample?.price)} CSPR</p>
         </div>
         <Link to={`/sample/${sample?.sample_id}`}>
           <div className="md:h-[44px] h-[35px] md:w-[44px] w-[35px] rounded-full bg-primary-default flex items-center justify-center cursor-pointer">

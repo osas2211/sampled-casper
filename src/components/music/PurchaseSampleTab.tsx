@@ -5,7 +5,7 @@ import { useWalletBalance } from "../../hooks/useWalletBalance";
 // TODO: Define Sample type for Casper
 
 import {
-  octasToMove,
+  motesToCspr,
   useHasPurchased,
   usePurchaseSample,
 } from "../../hooks/useSampledContract";
@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { BsCheckCircleFill } from "react-icons/bs";
 import { Link } from "react-router-dom";
 import { ISample } from "../../@types/sample"
-import { useWallet } from "@aptos-labs/wallet-adapter-react"
+import { useCasperWallet } from "../../providers/WalletProvider"
 
 export const PurchaseSampleTab = ({ sample }: { sample: ISample }) => {
   const { balances, updateBalance } = useWalletBalance();
@@ -23,8 +23,8 @@ export const PurchaseSampleTab = ({ sample }: { sample: ISample }) => {
   console.log(hasPurchased)
   const { mutate: purchaseSample, isPending: isPurchasing } =
     usePurchaseSample();
-  const { account } = useWallet();
-  const address = account?.address?.toString()
+  const { account } = useCasperWallet();
+  const address = account?.address
   const isSeller = address === sample?.seller;
 
   const handlePurchase = async () => {
@@ -79,14 +79,14 @@ export const PurchaseSampleTab = ({ sample }: { sample: ISample }) => {
         </div>
         <p>
           <span className="text-grey-300">Balance:</span>{" "}
-          {Number(Number(balances[0]?.balance).toFixed(3)).toLocaleString()} MOVE
+          {Number(Number(balances[0]?.balance).toFixed(3)).toLocaleString()} CSPR
         </p>
       </div>
 
       <div className="flex gap-2 items-center">
         <Avatar src="/assets/images/casper-logo.png" />
         <p className="text-lg md:text-xl">
-          Price: {octasToMove(sample?.price)} MOVE
+          Price: {motesToCspr(sample?.price)} CSPR
         </p>
         {isSeller ? (
           <p className="bg-primary p-1 px-2 text-xs rounded-full text-black">

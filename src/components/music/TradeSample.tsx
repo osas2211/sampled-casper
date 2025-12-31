@@ -9,7 +9,7 @@ import SampleInfoTabs from "./SampleInfoTabs";
 
 import { Link } from "react-router-dom";
 import { truncateString } from "../../util/string-helpers";
-import { octasToMove } from "../../hooks/useSampledContract";
+import { motesToCspr } from "../../hooks/useSampledContract";
 import { ISample } from "../../@types/sample"
 
 export const TradeSample = ({ sample }: { sample: ISample }) => {
@@ -41,7 +41,7 @@ export const TradeSample = ({ sample }: { sample: ISample }) => {
           <div className="flex items-center gap-1">
             <TbTrendingUp />
             <p className="text-primary text-sm">
-              {octasToMove(sample?.price)} MOVE
+              {motesToCspr(Number(sample?.price))} CSPR
             </p>
           </div>
         </div>

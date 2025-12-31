@@ -6,17 +6,17 @@ import { MdOutlineArrowForward } from "react-icons/md";
 import { Link } from "react-router-dom";
 import { truncateString } from "../../util/string-helpers";
 import {
-  octasToMove,
+  motesToCspr,
   useGetUserEarnings,
   useGetUserSamples,
 } from "../../hooks/useSampledContract";
 import { WithdrawEarningsModal } from "./WithdrawEarningsModal";
 import { ISample } from "../../@types/sample"
 import { Wallet2 } from "lucide-react"
-import { useWallet } from "@aptos-labs/wallet-adapter-react"
+import { useCasperWallet } from "../../providers/WalletProvider"
 
 export const UserProfile = () => {
-  const { account } = useWallet();
+  const { account } = useCasperWallet();
   const { data: user_samples } = useGetUserSamples();
   const { data: earnings } = useGetUserEarnings();
 
@@ -40,7 +40,7 @@ export const UserProfile = () => {
             <div className="bg-white/5 border-[1px] border-white/10 rounded-full backdrop-blur-[25px] p-2 px-3 inline-block">
               <div className="flex items-center gap-2">
                 <Wallet2 className="text-orange-400" size={20} />
-                <p className="text-sm">{truncateString(account?.address?.toString() ?? "")}</p>
+                <p className="text-sm">{truncateString(account?.address ?? "")}</p>
               </div>
             </div>
             <div className="flex items-center gap-4">
@@ -74,7 +74,7 @@ export const UserProfile = () => {
           <div>
             <p className="text-sm text-white/80">Earnings</p>
             <p className="text-[17px] font-semibold">
-              {octasToMove(earnings ?? 0)} MOVE
+              {motesToCspr(earnings ?? 0)} CSPR
             </p>
           </div>
           <div>

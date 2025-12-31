@@ -6,7 +6,7 @@ import {
   useCallback,
   PropsWithChildren,
 } from "react";
-import { CLPublicKey } from "casper-js-sdk";
+import { PublicKey } from "casper-js-sdk";
 
 // Casper Wallet types
 interface CasperWalletState {
@@ -24,7 +24,7 @@ interface CasperWalletEventDetail {
 
 // Context type
 export interface CasperWalletContextType {
-  account: { address: string; publicKey: CLPublicKey } | null;
+  account: { address: string; publicKey: PublicKey } | null;
   connected: boolean;
   isLoading: boolean;
   connect: () => Promise<void>;
@@ -76,7 +76,7 @@ declare global {
 }
 
 export const WalletProvider = ({ children }: PropsWithChildren) => {
-  const [account, setAccount] = useState<{ address: string; publicKey: CLPublicKey } | null>(null);
+  const [account, setAccount] = useState<{ address: string; publicKey: PublicKey } | null>(null);
   const [connected, setConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const network = getCurrentNetwork();
@@ -99,7 +99,7 @@ export const WalletProvider = ({ children }: PropsWithChildren) => {
           if (isConnected) {
             const activeKey = await provider.getActivePublicKey();
             if (activeKey) {
-              const publicKey = CLPublicKey.fromHex(activeKey);
+              const publicKey = PublicKey.fromHex(activeKey);
               setAccount({
                 address: activeKey,
                 publicKey,
@@ -138,7 +138,7 @@ export const WalletProvider = ({ children }: PropsWithChildren) => {
 
       if (activeKey) {
         try {
-          const publicKey = CLPublicKey.fromHex(activeKey);
+          const publicKey = PublicKey.fromHex(activeKey);
           setAccount({
             address: activeKey,
             publicKey,
@@ -183,7 +183,7 @@ export const WalletProvider = ({ children }: PropsWithChildren) => {
       if (connected) {
         const activeKey = await provider.getActivePublicKey();
         if (activeKey) {
-          const publicKey = CLPublicKey.fromHex(activeKey);
+          const publicKey = PublicKey.fromHex(activeKey);
           setAccount({
             address: activeKey,
             publicKey,

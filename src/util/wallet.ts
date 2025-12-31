@@ -1,5 +1,3 @@
-import { CasperServiceByJsonRPC, CLPublicKey } from "casper-js-sdk";
-
 export type Balance = {
   asset_type: string;
   balance: string;
@@ -9,32 +7,46 @@ export type Balance = {
 
 // Casper Network configuration
 const CASPER_RPC_URL = import.meta.env.VITE_CASPER_RPC_URL || "https://rpc.testnet.casperlabs.io/rpc";
-const casperService = new CasperServiceByJsonRPC(CASPER_RPC_URL);
 
 // CSPR has 9 decimals (motes)
 const CSPR_DECIMALS = 9;
 
+// Helper for JSON-RPC calls
+async function rpcCall<T>(method: string, params: unknown[]): Promise<T> {
+  const response = await fetch(CASPER_RPC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method,
+      params,
+    }),
+  });
+
+  const data = await response.json();
+  if (data.error) {
+    throw new Error(data.error.message || "RPC Error");
+  }
+  return data.result;
+}
+
 export const fetchBalance = async (address: string): Promise<Balance[]> => {
   try {
-    // Parse the public key
-    const publicKey = CLPublicKey.fromHex(address);
-    const accountHash = publicKey.toAccountHashStr();
-
-    // Get the latest state root hash
-    const latestBlock = await casperService.getLatestBlockInfo();
-    const stateRootHash = latestBlock.block?.header.state_root_hash;
-
-    if (!stateRootHash) {
-      throw new Error("Could not get state root hash");
+    // Use query_balance RPC (Casper 2.0 compatible)
+    interface QueryBalanceResult {
+      balance: string;
     }
 
-    // Get account balance
-    const balanceResult = await casperService.getAccountBalance(
-      stateRootHash,
-      publicKey
-    );
+    const result = await rpcCall<QueryBalanceResult>("query_balance", [
+      {
+        purse_identifier: {
+          main_purse_under_public_key: address,
+        },
+      },
+    ]);
 
-    const balanceInMotes = balanceResult.toString();
+    const balanceInMotes = result.balance || "0";
     const balanceInCspr = Number(balanceInMotes) / Math.pow(10, CSPR_DECIMALS);
 
     return [

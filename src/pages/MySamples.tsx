@@ -1,9 +1,9 @@
-import { useWallet } from "@aptos-labs/wallet-adapter-react";
+import { useCasperWallet } from "../providers/WalletProvider";
 import { MySamples } from "../components/explore/MySamples";
 import { WalletButton } from "../components/WalletButton";
 
 const MySamplesPage = () => {
-  const { connected } = useWallet();
+  const { connected } = useCasperWallet();
   if (!connected) {
     return (
       <div className="h-[50vh] flex flex-col items-center justify-center p-4">

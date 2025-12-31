@@ -10,7 +10,7 @@ import { useParams } from "react-router-dom";
 import { truncateString } from "../util/string-helpers";
 import { Download } from "lucide-react";
 import { downloadAudio } from "../util/download-audio";
-import { useWallet } from "@aptos-labs/wallet-adapter-react"
+import { useCasperWallet } from "../providers/WalletProvider"
 
 const SamplePage = () => {
   const { id } = useParams();
@@ -28,8 +28,8 @@ const SamplePage = () => {
   };
 
   const { data: hasPurchased } = useHasPurchased(String(id));
-  const {account} = useWallet()
-  const address = account?.address?.toString()
+  const { account } = useCasperWallet()
+  const address = account?.address
   const isSeller = address === data?.seller;
   return (
     <>

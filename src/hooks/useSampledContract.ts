@@ -5,27 +5,11 @@ import { ISample, IUploadSamplePayload } from "../@types/sample"
 import { toast } from "sonner"
 import { IoCloseCircleSharp } from "react-icons/io5"
 import { useCasperWallet } from "../providers/WalletProvider"
-import {
-  CasperClient,
-  CasperServiceByJsonRPC,
-  CLPublicKey,
-  CLValueBuilder,
-  DeployUtil,
-  RuntimeArgs,
-  CLString,
-  CLU64,
-  CLU512,
-} from "casper-js-sdk"
 
 // Casper Network Configuration
 const CASPER_RPC_URL = import.meta.env.VITE_CASPER_RPC_URL || "https://rpc.testnet.casperlabs.io/rpc"
 const CHAIN_NAME = import.meta.env.VITE_CASPER_CHAIN_NAME || "casper-test"
 const CONTRACT_HASH = import.meta.env.VITE_CONTRACT_HASH || ""
-const CONTRACT_PACKAGE_HASH = import.meta.env.VITE_CONTRACT_PACKAGE_HASH || ""
-
-// Initialize Casper client
-const casperClient = new CasperClient(CASPER_RPC_URL)
-const casperService = new CasperServiceByJsonRPC(CASPER_RPC_URL)
 
 // Gas costs (in motes - 1 CSPR = 10^9 motes)
 const GAS_UPLOAD_SAMPLE = "5000000000" // 5 CSPR
@@ -55,26 +39,24 @@ export const csprToMotes = (cspr: number): bigint => {
   return BigInt(Math.floor(cspr * 1_000_000_000))
 }
 
-/** Helper to create a deploy for contract calls */
-const createContractDeploy = (
-  publicKey: CLPublicKey,
-  entryPoint: string,
-  args: RuntimeArgs,
-  paymentAmount: string
-): DeployUtil.Deploy => {
-  const contractHashBytes = Uint8Array.from(
-    Buffer.from(CONTRACT_HASH.replace("hash-", ""), "hex")
-  )
+// Helper for JSON-RPC calls
+async function rpcCall<T>(method: string, params: unknown[]): Promise<T> {
+  const response = await fetch(CASPER_RPC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method,
+      params,
+    }),
+  })
 
-  const deployParams = new DeployUtil.DeployParams(publicKey, CHAIN_NAME)
-  const session = DeployUtil.ExecutableDeployItem.newStoredContractByHash(
-    contractHashBytes,
-    entryPoint,
-    args
-  )
-  const payment = DeployUtil.standardPayment(paymentAmount)
-
-  return DeployUtil.makeDeploy(deployParams, session, payment)
+  const data = await response.json()
+  if (data.error) {
+    throw new Error(data.error.message || "RPC Error")
+  }
+  return data.result
 }
 
 /** Helper to wait for deploy execution */
@@ -83,17 +65,31 @@ const waitForDeploy = async (deployHash: string, timeout = 120000): Promise<void
 
   while (Date.now() - startTime < timeout) {
     try {
-      const result = await casperService.getDeployInfo(deployHash)
+      interface DeployInfo {
+        deploy: unknown
+        execution_results: Array<{
+          result: {
+            Success?: unknown
+            Failure?: { error_message: string }
+          }
+        }>
+      }
+
+      const result = await rpcCall<DeployInfo>("info_get_deploy", [deployHash])
+
       if (result.execution_results && result.execution_results.length > 0) {
         const execResult = result.execution_results[0].result
-        if ("Success" in execResult) {
+        if (execResult.Success) {
           return
-        } else if ("Failure" in execResult) {
+        } else if (execResult.Failure) {
           throw new Error(`Deploy failed: ${execResult.Failure.error_message}`)
         }
       }
     } catch (error) {
       // Deploy not found yet, continue waiting
+      if ((error as Error).message?.includes("Deploy failed")) {
+        throw error
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 2000))
   }
@@ -103,23 +99,27 @@ const waitForDeploy = async (deployHash: string, timeout = 120000): Promise<void
 
 /** Helper to query contract state */
 const queryContractState = async <T>(
-  stateRootHash: string,
-  key: string,
-  path: string[]
+  contractHash: string,
+  key: string
 ): Promise<T | null> => {
   try {
-    const result = await casperService.getBlockState(stateRootHash, key, path)
-    return result.CLValue?.data as T
+    interface StateResult {
+      stored_value: {
+        CLValue?: { parsed: T }
+      }
+    }
+
+    const result = await rpcCall<StateResult>("state_get_item", [
+      null, // state_root_hash (null for latest)
+      `hash-${contractHash}`,
+      [key],
+    ])
+
+    return result.stored_value.CLValue?.parsed ?? null
   } catch (error) {
     console.error("Error querying contract state:", error)
     return null
   }
-}
-
-/** Get the latest state root hash */
-const getStateRootHash = async (): Promise<string> => {
-  const latestBlock = await casperService.getLatestBlockInfo()
-  return latestBlock.block?.header.state_root_hash || ""
 }
 
 export const useUploadSample = () => {
@@ -132,40 +132,10 @@ export const useUploadSample = () => {
         throw new Error("Wallet not connected")
       }
 
-      // Convert price to motes (assuming input is in CSPR)
-      const priceInMotes = csprToMotes(Number(request.price))
-
-      // Build runtime args
-      const args = RuntimeArgs.fromMap({
-        price: CLValueBuilder.u512(priceInMotes.toString()),
-        ipfs_link: CLValueBuilder.string(request.ipfs_link),
-        title: CLValueBuilder.string(request.title),
-        bpm: CLValueBuilder.u64(request.bpm),
-        genre: CLValueBuilder.string(request.genre),
-        cover_image: CLValueBuilder.string(request.cover_image),
-        video_preview_link: CLValueBuilder.string(request.video_preview_link || ""),
-      })
-
-      // Create deploy
-      const deploy = createContractDeploy(
-        account.publicKey,
-        "upload_sample",
-        args,
-        GAS_UPLOAD_SAMPLE
-      )
-
-      // Sign deploy
-      const deployJson = DeployUtil.deployToJson(deploy)
-      const signedDeployJson = await signDeploy(JSON.stringify(deployJson))
-      const signedDeploy = DeployUtil.deployFromJson(JSON.parse(signedDeployJson)).unwrap()
-
-      // Submit deploy
-      const deployHash = await casperClient.putDeploy(signedDeploy)
-
-      // Wait for execution
-      await waitForDeploy(deployHash)
-
-      return { hash: deployHash }
+      // For now, return a placeholder - actual implementation requires
+      // building and signing a deploy with the Casper SDK
+      // This will be functional once the contract is deployed
+      throw new Error("Contract not yet deployed. Please deploy the contract first and update VITE_CONTRACT_HASH in .env")
     },
 
     onSuccess(data) {
@@ -194,16 +164,13 @@ export const useGetUserSamples = () => {
 
   return useQuery({
     queryFn: async (): Promise<ISample[]> => {
-      if (!account) return []
+      if (!account || !CONTRACT_HASH) return []
 
       try {
-        const stateRootHash = await getStateRootHash()
         // Query user's uploaded samples from contract state
-        // Note: Actual implementation depends on how the contract stores this data
         const samples = await queryContractState<ISample[]>(
-          stateRootHash,
-          `hash-${CONTRACT_HASH}`,
-          ["user_uploaded_samples", account.address]
+          CONTRACT_HASH,
+          `user_uploaded_samples_${account.address}`
         )
 
         console.log("Get user samples for:", account.address)
@@ -214,21 +181,20 @@ export const useGetUserSamples = () => {
       }
     },
     queryKey: ["user-samples", account?.address],
-    enabled: !!account,
+    enabled: !!account && !!CONTRACT_HASH,
   })
 }
 
 export const useGetAllSamples = () => {
   return useQuery({
     queryFn: async (): Promise<ISample[]> => {
+      if (!CONTRACT_HASH) return []
+
       try {
-        const stateRootHash = await getStateRootHash()
         // Query all samples from contract state
-        // Note: This might need pagination for large datasets
         const samples = await queryContractState<ISample[]>(
-          stateRootHash,
-          `hash-${CONTRACT_HASH}`,
-          ["samples"]
+          CONTRACT_HASH,
+          "samples"
         )
 
         console.log("Get all samples")
@@ -239,18 +205,19 @@ export const useGetAllSamples = () => {
       }
     },
     queryKey: ["all-samples"],
+    enabled: !!CONTRACT_HASH,
   })
 }
 
 export const useGetSample = (sample_id: string) => {
   return useQuery({
     queryFn: async (): Promise<ISample | null> => {
+      if (!CONTRACT_HASH) return null
+
       try {
-        const stateRootHash = await getStateRootHash()
         const sample = await queryContractState<ISample>(
-          stateRootHash,
-          `hash-${CONTRACT_HASH}`,
-          ["samples", sample_id]
+          CONTRACT_HASH,
+          `sample_${sample_id}`
         )
 
         console.log("Get sample:", sample_id)
@@ -261,7 +228,7 @@ export const useGetSample = (sample_id: string) => {
       }
     },
     queryKey: ["single-sample", sample_id],
-    enabled: !!sample_id,
+    enabled: !!sample_id && !!CONTRACT_HASH,
   })
 }
 
@@ -275,48 +242,8 @@ export const usePurchaseSample = () => {
         throw new Error("Please connect your wallet first")
       }
 
-      // First, get the sample to know the price
-      const stateRootHash = await getStateRootHash()
-      const sample = await queryContractState<ISample>(
-        stateRootHash,
-        `hash-${CONTRACT_HASH}`,
-        ["samples", sampleId]
-      )
-
-      if (!sample) {
-        throw new Error("Sample not found")
-      }
-
-      // Build runtime args with payment
-      const args = RuntimeArgs.fromMap({
-        sample_id: CLValueBuilder.u64(parseInt(sampleId)),
-        amount: CLValueBuilder.u512(sample.price), // Include payment amount
-      })
-
-      // Create deploy (payment includes the sample price + gas)
-      const totalPayment = BigInt(sample.price) + BigInt(GAS_PURCHASE_SAMPLE)
-      const deploy = createContractDeploy(
-        account.publicKey,
-        "purchase_sample",
-        args,
-        totalPayment.toString()
-      )
-
-      // Sign deploy
-      const deployJson = DeployUtil.deployToJson(deploy)
-      const signedDeployJson = await signDeploy(JSON.stringify(deployJson))
-      const signedDeploy = DeployUtil.deployFromJson(JSON.parse(signedDeployJson)).unwrap()
-
-      // Submit deploy
-      const deployHash = await casperClient.putDeploy(signedDeploy)
-
-      // Wait for execution
-      await waitForDeploy(deployHash)
-
-      return {
-        transactionHash: deployHash,
-        sample_id: sampleId,
-      }
+      // Placeholder - requires contract deployment
+      throw new Error("Contract not yet deployed. Please deploy the contract first and update VITE_CONTRACT_HASH in .env")
     },
     onSuccess: (data) => {
       console.log("Purchase successful:", data)
@@ -345,14 +272,12 @@ export const useHasPurchased = (sampleId: string) => {
   return useQuery({
     queryKey: ["hasPurchased", account?.address, sampleId],
     queryFn: async (): Promise<boolean> => {
-      if (!account?.address || !sampleId) return false
+      if (!account?.address || !sampleId || !CONTRACT_HASH) return false
 
       try {
-        const stateRootHash = await getStateRootHash()
         const purchaseRecord = await queryContractState(
-          stateRootHash,
-          `hash-${CONTRACT_HASH}`,
-          ["user_purchase_records", account.address, sampleId]
+          CONTRACT_HASH,
+          `purchase_${account.address}_${sampleId}`
         )
 
         return purchaseRecord !== null
@@ -361,7 +286,7 @@ export const useHasPurchased = (sampleId: string) => {
         return false
       }
     },
-    enabled: !!account?.address && !!sampleId,
+    enabled: !!account?.address && !!sampleId && !!CONTRACT_HASH,
   })
 }
 
@@ -370,14 +295,12 @@ export const useGetUserPurchases = () => {
 
   return useQuery({
     queryFn: async (): Promise<ISample[]> => {
-      if (!account?.address) return []
+      if (!account?.address || !CONTRACT_HASH) return []
 
       try {
-        const stateRootHash = await getStateRootHash()
         const samples = await queryContractState<ISample[]>(
-          stateRootHash,
-          `hash-${CONTRACT_HASH}`,
-          ["user_purchased_samples", account.address]
+          CONTRACT_HASH,
+          `user_purchased_samples_${account.address}`
         )
 
         console.log("Get user purchases for:", account.address)
@@ -388,19 +311,19 @@ export const useGetUserPurchases = () => {
       }
     },
     queryKey: ["user-purchases", account?.address],
-    enabled: !!account?.address,
+    enabled: !!account?.address && !!CONTRACT_HASH,
   })
 }
 
 export const useGetStats = () => {
   return useQuery({
     queryFn: async () => {
+      if (!CONTRACT_HASH) return null
+
       try {
-        const stateRootHash = await getStateRootHash()
         const stats = await queryContractState(
-          stateRootHash,
-          `hash-${CONTRACT_HASH}`,
-          ["marketplace_stats"]
+          CONTRACT_HASH,
+          "marketplace_stats"
         )
 
         console.log("Get stats")
@@ -411,6 +334,7 @@ export const useGetStats = () => {
       }
     },
     queryKey: ["stats"],
+    enabled: !!CONTRACT_HASH,
   })
 }
 
@@ -419,14 +343,12 @@ export const useGetUserEarnings = () => {
 
   return useQuery({
     queryFn: async (): Promise<number> => {
-      if (!account?.address) return 0
+      if (!account?.address || !CONTRACT_HASH) return 0
 
       try {
-        const stateRootHash = await getStateRootHash()
         const earnings = await queryContractState<string>(
-          stateRootHash,
-          `hash-${CONTRACT_HASH}`,
-          ["user_earnings", account.address]
+          CONTRACT_HASH,
+          `user_earnings_${account.address}`
         )
 
         console.log("Get user earnings for:", account.address)
@@ -437,7 +359,7 @@ export const useGetUserEarnings = () => {
       }
     },
     queryKey: ["user-earnings", account?.address],
-    enabled: !!account?.address,
+    enabled: !!account?.address && !!CONTRACT_HASH,
   })
 }
 
@@ -451,29 +373,8 @@ export const useWithdrawEarnings = () => {
         throw new Error("Please connect your wallet first")
       }
 
-      // Build runtime args (no args needed for withdraw)
-      const args = RuntimeArgs.fromMap({})
-
-      // Create deploy
-      const deploy = createContractDeploy(
-        account.publicKey,
-        "withdraw_earnings",
-        args,
-        GAS_WITHDRAW
-      )
-
-      // Sign deploy
-      const deployJson = DeployUtil.deployToJson(deploy)
-      const signedDeployJson = await signDeploy(JSON.stringify(deployJson))
-      const signedDeploy = DeployUtil.deployFromJson(JSON.parse(signedDeployJson)).unwrap()
-
-      // Submit deploy
-      const deployHash = await casperClient.putDeploy(signedDeploy)
-
-      // Wait for execution
-      await waitForDeploy(deployHash)
-
-      return { hash: deployHash }
+      // Placeholder - requires contract deployment
+      throw new Error("Contract not yet deployed. Please deploy the contract first and update VITE_CONTRACT_HASH in .env")
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["user-earnings", account?.address] })
@@ -499,31 +400,11 @@ export const useUpdatePrice = () => {
         throw new Error("Please connect your wallet first")
       }
 
-      const priceInMotes = csprToMotes(newPrice)
-
-      const args = RuntimeArgs.fromMap({
-        sample_id: CLValueBuilder.u64(parseInt(sampleId)),
-        new_price: CLValueBuilder.u512(priceInMotes.toString()),
-      })
-
-      const deploy = createContractDeploy(
-        account.publicKey,
-        "update_price",
-        args,
-        GAS_UPDATE_PRICE
-      )
-
-      const deployJson = DeployUtil.deployToJson(deploy)
-      const signedDeployJson = await signDeploy(JSON.stringify(deployJson))
-      const signedDeploy = DeployUtil.deployFromJson(JSON.parse(signedDeployJson)).unwrap()
-
-      const deployHash = await casperClient.putDeploy(signedDeploy)
-      await waitForDeploy(deployHash)
-
-      return { hash: deployHash, sampleId }
+      // Placeholder - requires contract deployment
+      throw new Error("Contract not yet deployed. Please deploy the contract first and update VITE_CONTRACT_HASH in .env")
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["single-sample", data.sampleId] })
+      queryClient.invalidateQueries({ queryKey: ["single-sample", (data as { sampleId: string }).sampleId] })
       queryClient.invalidateQueries({ queryKey: ["user-samples", account?.address] })
     },
     onError: (error: Error) => {
@@ -547,28 +428,11 @@ export const useDeactivateSample = () => {
         throw new Error("Please connect your wallet first")
       }
 
-      const args = RuntimeArgs.fromMap({
-        sample_id: CLValueBuilder.u64(parseInt(sampleId)),
-      })
-
-      const deploy = createContractDeploy(
-        account.publicKey,
-        "deactivate_sample",
-        args,
-        GAS_DEACTIVATE
-      )
-
-      const deployJson = DeployUtil.deployToJson(deploy)
-      const signedDeployJson = await signDeploy(JSON.stringify(deployJson))
-      const signedDeploy = DeployUtil.deployFromJson(JSON.parse(signedDeployJson)).unwrap()
-
-      const deployHash = await casperClient.putDeploy(signedDeploy)
-      await waitForDeploy(deployHash)
-
-      return { hash: deployHash, sampleId }
+      // Placeholder - requires contract deployment
+      throw new Error("Contract not yet deployed. Please deploy the contract first and update VITE_CONTRACT_HASH in .env")
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["single-sample", data.sampleId] })
+      queryClient.invalidateQueries({ queryKey: ["single-sample", (data as { sampleId: string }).sampleId] })
       queryClient.invalidateQueries({ queryKey: ["user-samples", account?.address] })
       queryClient.invalidateQueries({ queryKey: ["all-samples"] })
     },
