@@ -1,0 +1,14 @@
+[project]
+name = "sampled-contracts"
+version = "1.0.0"
+
+[contracts]
+sampled_marketplace = { path = "src/sampled_marketplace.rs" }
+
+[network.casper-testnet]
+chain-name = "casper-test"
+rpc-url = "https://rpc.testnet.casperlabs.io/rpc"
+
+[network.casper-mainnet]
+chain-name = "casper"
+rpc-url = "https://rpc.mainnet.casperlabs.io/rpc"
