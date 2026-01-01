@@ -8,11 +8,20 @@ description = "Music Sample Marketplace on Casper Network"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "sampled_contracts_build_contract"
+path = "bin/build_contract.rs"
+test = false
+
 [dependencies]
-odra = "1.2.0"
+odra = "2.4"
+odra-modules = "2.4"
+
+[build-dependencies]
+odra-build = "2.4"
 
 [dev-dependencies]
-odra-test = "1.2.0"
+odra-test = "2.4"
 
 [features]
 default = []

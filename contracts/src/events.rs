@@ -5,7 +5,6 @@
 
 use odra::prelude::*;
 use odra::casper_types::U512;
-use odra::Address;
 
 /// Emitted when a new sample is uploaded to the marketplace
 #[odra::event]

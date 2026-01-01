@@ -2,11 +2,9 @@
 
 use odra::prelude::*;
 use odra::casper_types::U512;
-use odra::Address;
 
 /// Represents a music sample listed on the marketplace
 #[odra::odra_type]
-#[derive(Default)]
 pub struct Sample {
     /// Unique identifier for this sample
     pub sample_id: u64,
@@ -36,7 +34,6 @@ pub struct Sample {
 
 /// Record of a purchase made by a user
 #[odra::odra_type]
-#[derive(Default)]
 pub struct PurchaseRecord {
     /// ID of the purchased sample
     pub sample_id: u64,

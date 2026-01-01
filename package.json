@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier . --write",
-    "prepare": "husky"
+    "prepare": "husky",
+    "build::contract": "cd contracts && rustup run nightly-2024-12-01 cargo odra build"
   },
   "dependencies": {
     "@ant-design/v5-patch-for-react-19": "^1.0.3",

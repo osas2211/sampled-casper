@@ -2,8 +2,8 @@
 name = "sampled-contracts"
 version = "1.0.0"
 
-[contracts]
-sampled_marketplace = { path = "src/sampled_marketplace.rs" }
+[[contracts]]
+fqn = "sampled_contracts::SampledMarketplace"
 
 [network.casper-testnet]
 chain-name = "casper-test"

@@ -5,7 +5,6 @@
 
 use odra::prelude::*;
 use odra::casper_types::U512;
-use odra::{Address, Mapping, List, Var};
 
 use crate::errors::Error;
 use crate::events::{
@@ -14,21 +13,12 @@ use crate::events::{
 };
 use crate::types::{Sample, PurchaseRecord, UserStats, MarketplaceStats, constants::*};
 
-/// Initialization arguments for the marketplace
-#[odra::odra_type]
-pub struct SampledMarketplaceInitArgs {
-    /// Initial admin address (receives platform fees)
-    pub admin: Address,
-}
 
 /// Main marketplace contract module
-#[odra::module(events = [
-    SampleUploaded,
-    SamplePurchased,
-    EarningsWithdrawn,
-    SampleDeactivated,
-    PriceUpdated
-])]
+#[odra::module(
+    events = [SampleUploaded, SamplePurchased, EarningsWithdrawn, SampleDeactivated, PriceUpdated],
+    errors = Error
+)]
 pub struct SampledMarketplace {
     // ============================================
     // Storage Variables
@@ -46,20 +36,26 @@ pub struct SampledMarketplace {
     admin: Var<Address>,
 
     // ============================================
-    // User Data Storage
+    // User Data Storage (using indexed mappings)
     // ============================================
 
-    /// List of sample IDs uploaded by each user
-    user_uploaded_samples: Mapping<Address, List<u64>>,
-    /// List of sample IDs purchased by each user
-    user_purchased_samples: Mapping<Address, List<u64>>,
+    /// Count of samples uploaded by each user
+    user_uploaded_count: Mapping<Address, u64>,
+    /// Indexed sample IDs: (user, index) -> sample_id
+    user_uploaded_at: Mapping<(Address, u64), u64>,
+
+    /// Count of samples purchased by each user
+    user_purchased_count: Mapping<Address, u64>,
+    /// Indexed purchased sample IDs: (user, index) -> sample_id
+    user_purchased_at: Mapping<(Address, u64), u64>,
+
     /// User's available earnings (withdrawable)
     user_earnings: Mapping<Address, U512>,
     /// User's total lifetime earnings
     user_total_earned: Mapping<Address, U512>,
     /// User's total lifetime spending
     user_total_spent: Mapping<Address, U512>,
-    /// Purchase records for each user (sample_id -> PurchaseRecord)
+    /// Purchase records for each user (buyer, sample_id) -> PurchaseRecord
     user_purchase_records: Mapping<(Address, u64), PurchaseRecord>,
 }
 
@@ -70,12 +66,9 @@ impl SampledMarketplace {
     // ============================================
 
     /// Initialize the marketplace contract
-    ///
-    /// # Arguments
-    /// * `init_args` - Initialization arguments containing admin address
     #[odra(init)]
-    pub fn init(&mut self, init_args: SampledMarketplaceInitArgs) {
-        self.admin.set(init_args.admin);
+    pub fn init(&mut self, admin: Address) {
+        self.admin.set(admin);
         self.sample_count.set(0);
         self.total_volume.set(U512::zero());
         self.platform_fee_collected.set(U512::zero());
@@ -86,15 +79,6 @@ impl SampledMarketplace {
     // ============================================
 
     /// Upload a new sample to the marketplace
-    ///
-    /// # Arguments
-    /// * `price` - Price in motes
-    /// * `ipfs_link` - IPFS link to the audio file
-    /// * `title` - Title of the sample
-    /// * `bpm` - Beats per minute
-    /// * `genre` - Music genre
-    /// * `cover_image` - IPFS link to cover image
-    /// * `video_preview_link` - Optional IPFS link to video preview
     pub fn upload_sample(
         &mut self,
         price: U512,
@@ -154,9 +138,10 @@ impl SampledMarketplace {
         // Store sample
         self.samples.set(&sample_id, sample);
 
-        // Add to user's uploaded samples
-        let mut user_samples = self.user_uploaded_samples.get_or_default(&caller);
-        user_samples.push(sample_id);
+        // Add to user's uploaded samples using indexed mapping
+        let user_count = self.user_uploaded_count.get_or_default(&caller);
+        self.user_uploaded_at.set(&(caller, user_count), sample_id);
+        self.user_uploaded_count.set(&caller, user_count + 1);
 
         // Emit event
         self.env().emit_event(SampleUploaded {
@@ -171,9 +156,6 @@ impl SampledMarketplace {
     }
 
     /// Purchase a sample from the marketplace
-    ///
-    /// # Arguments
-    /// * `sample_id` - ID of the sample to purchase
     #[odra(payable)]
     pub fn purchase_sample(&mut self, sample_id: u64) {
         let caller = self.env().caller();
@@ -210,9 +192,11 @@ impl SampledMarketplace {
         let fee_collected = self.platform_fee_collected.get_or_default() + platform_fee;
         self.platform_fee_collected.set(fee_collected);
 
-        // Update buyer's data
-        let mut buyer_purchases = self.user_purchased_samples.get_or_default(&caller);
-        buyer_purchases.push(sample_id);
+        // Update buyer's purchased samples using indexed mapping
+        let buyer_count = self.user_purchased_count.get_or_default(&caller);
+        self.user_purchased_at.set(&(caller, buyer_count), sample_id);
+        self.user_purchased_count.set(&caller, buyer_count + 1);
+
         let buyer_spent = self.user_total_spent.get_or_default(&caller) + sample.price;
         self.user_total_spent.set(&caller, buyer_spent);
 
@@ -249,10 +233,6 @@ impl SampledMarketplace {
     }
 
     /// Update the price of a sample
-    ///
-    /// # Arguments
-    /// * `sample_id` - ID of the sample
-    /// * `new_price` - New price in motes
     pub fn update_price(&mut self, sample_id: u64, new_price: U512) {
         let caller = self.env().caller();
 
@@ -260,11 +240,9 @@ impl SampledMarketplace {
             self.env().revert(Error::InvalidPrice);
         }
 
-        // Get sample
         let mut sample = self.samples.get(&sample_id)
             .unwrap_or_else(|| self.env().revert(Error::SampleNotFound));
 
-        // Verify ownership
         if sample.seller != caller {
             self.env().revert(Error::NotSeller);
         }
@@ -273,7 +251,6 @@ impl SampledMarketplace {
         sample.price = new_price;
         self.samples.set(&sample_id, sample);
 
-        // Emit event
         self.env().emit_event(PriceUpdated {
             sample_id,
             old_price,
@@ -283,17 +260,12 @@ impl SampledMarketplace {
     }
 
     /// Deactivate a sample (soft delete)
-    ///
-    /// # Arguments
-    /// * `sample_id` - ID of the sample to deactivate
     pub fn deactivate_sample(&mut self, sample_id: u64) {
         let caller = self.env().caller();
 
-        // Get sample
         let mut sample = self.samples.get(&sample_id)
             .unwrap_or_else(|| self.env().revert(Error::SampleNotFound));
 
-        // Verify ownership
         if sample.seller != caller {
             self.env().revert(Error::NotSeller);
         }
@@ -301,7 +273,6 @@ impl SampledMarketplace {
         sample.is_active = false;
         self.samples.set(&sample_id, sample);
 
-        // Emit event
         self.env().emit_event(SampleDeactivated {
             sample_id,
             seller: caller,
@@ -313,7 +284,6 @@ impl SampledMarketplace {
     pub fn withdraw_earnings(&mut self) {
         let caller = self.env().caller();
 
-        // Get earnings
         let earnings = self.user_earnings.get_or_default(&caller);
         if earnings == U512::zero() {
             self.env().revert(Error::NoEarnings);
@@ -325,7 +295,6 @@ impl SampledMarketplace {
         // Transfer earnings to user
         self.env().transfer_tokens(&caller, &earnings);
 
-        // Emit event
         self.env().emit_event(EarningsWithdrawn {
             user: caller,
             amount: earnings,
@@ -344,12 +313,9 @@ impl SampledMarketplace {
 
     /// Get user statistics
     pub fn get_user_stats(&self, user: Address) -> UserStats {
-        let uploaded_samples = self.user_uploaded_samples.get_or_default(&user);
-        let purchased_samples = self.user_purchased_samples.get_or_default(&user);
-
         UserStats {
-            uploaded_count: uploaded_samples.len() as u64,
-            purchased_count: purchased_samples.len() as u64,
+            uploaded_count: self.user_uploaded_count.get_or_default(&user),
+            purchased_count: self.user_purchased_count.get_or_default(&user),
             earnings: self.user_earnings.get_or_default(&user),
             total_earned: self.user_total_earned.get_or_default(&user),
             total_spent: self.user_total_spent.get_or_default(&user),
@@ -372,14 +338,26 @@ impl SampledMarketplace {
 
     /// Get user's uploaded sample IDs
     pub fn get_user_samples(&self, user: Address) -> Vec<u64> {
-        let samples = self.user_uploaded_samples.get_or_default(&user);
-        samples.iter().collect()
+        let count = self.user_uploaded_count.get_or_default(&user);
+        let mut result = Vec::new();
+        for i in 0..count {
+            if let Some(id) = self.user_uploaded_at.get(&(user, i)) {
+                result.push(id);
+            }
+        }
+        result
     }
 
     /// Get user's purchased sample IDs
     pub fn get_user_purchases(&self, user: Address) -> Vec<u64> {
-        let samples = self.user_purchased_samples.get_or_default(&user);
-        samples.iter().collect()
+        let count = self.user_purchased_count.get_or_default(&user);
+        let mut result = Vec::new();
+        for i in 0..count {
+            if let Some(id) = self.user_purchased_at.get(&(user, i)) {
+                result.push(id);
+            }
+        }
+        result
     }
 
     /// Get user's available earnings
@@ -391,7 +369,6 @@ impl SampledMarketplace {
     pub fn get_all_samples(&self) -> Vec<Sample> {
         let count = self.sample_count.get_or_default();
         let mut result = Vec::new();
-
         for id in 1..=count {
             if let Some(sample) = self.samples.get(&id) {
                 if sample.is_active {
@@ -399,35 +376,30 @@ impl SampledMarketplace {
                 }
             }
         }
-
         result
     }
 
     /// Get full sample data for user's uploaded samples
     pub fn get_user_samples_full(&self, user: Address) -> Vec<Sample> {
-        let sample_ids = self.user_uploaded_samples.get_or_default(&user);
+        let sample_ids = self.get_user_samples(user);
         let mut result = Vec::new();
-
-        for id in sample_ids.iter() {
+        for id in sample_ids {
             if let Some(sample) = self.samples.get(&id) {
                 result.push(sample);
             }
         }
-
         result
     }
 
     /// Get full sample data for user's purchased samples
     pub fn get_user_purchases_full(&self, user: Address) -> Vec<Sample> {
-        let sample_ids = self.user_purchased_samples.get_or_default(&user);
+        let sample_ids = self.get_user_purchases(user);
         let mut result = Vec::new();
-
-        for id in sample_ids.iter() {
+        for id in sample_ids {
             if let Some(sample) = self.samples.get(&id) {
                 result.push(sample);
             }
         }
-
         result
     }
 
@@ -440,7 +412,6 @@ impl SampledMarketplace {
     // Internal Functions
     // ============================================
 
-    /// Internal check if user has purchased a sample
     fn has_purchased_internal(&self, buyer: &Address, sample_id: u64) -> bool {
         self.user_purchase_records.get(&(*buyer, sample_id)).is_some()
     }
@@ -453,14 +424,13 @@ impl SampledMarketplace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use odra::host::{Deployer, HostEnv, NoArgs};
+    use odra::host::{Deployer, HostEnv};
 
     fn setup() -> (SampledMarketplaceHostRef, HostEnv) {
         let env = odra_test::env();
         let admin = env.get_account(0);
 
-        let init_args = SampledMarketplaceInitArgs { admin };
-        let contract = SampledMarketplaceHostRef::deploy(&env, init_args);
+        let contract = SampledMarketplaceHostRef::deploy(&env, admin);
 
         (contract, env)
     }
@@ -472,7 +442,7 @@ mod tests {
         env.set_caller(seller);
 
         contract.upload_sample(
-            U512::from(1_000_000_000u64), // 1 CSPR
+            U512::from(1_000_000_000u64),
             "ipfs://QmTest123".to_string(),
             "Test Beat".to_string(),
             120,
@@ -493,7 +463,6 @@ mod tests {
         let seller = env.get_account(1);
         let buyer = env.get_account(2);
 
-        // Upload sample
         env.set_caller(seller);
         contract.upload_sample(
             U512::from(1_000_000_000u64),
@@ -505,14 +474,10 @@ mod tests {
             "".to_string(),
         );
 
-        // Purchase sample
         env.set_caller(buyer);
         contract.with_tokens(U512::from(1_000_000_000u64)).purchase_sample(1);
 
-        // Verify purchase
         assert!(contract.has_purchased(buyer, 1));
-
-        // Verify seller earnings (90% of price)
         let earnings = contract.get_earnings(seller);
         assert_eq!(earnings, U512::from(900_000_000u64));
     }
@@ -523,7 +488,6 @@ mod tests {
         let seller = env.get_account(1);
         let buyer = env.get_account(2);
 
-        // Upload and purchase
         env.set_caller(seller);
         contract.upload_sample(
             U512::from(1_000_000_000u64),
@@ -538,11 +502,9 @@ mod tests {
         env.set_caller(buyer);
         contract.with_tokens(U512::from(1_000_000_000u64)).purchase_sample(1);
 
-        // Withdraw earnings
         env.set_caller(seller);
         contract.withdraw_earnings();
 
-        // Verify earnings are now 0
         let earnings = contract.get_earnings(seller);
         assert_eq!(earnings, U512::zero());
     }

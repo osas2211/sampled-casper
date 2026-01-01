@@ -395,6 +395,7 @@ export const useUpdatePrice = () => {
   const queryClient = useQueryClient()
 
   return useMutation({
+    // @ts-ignore
     mutationFn: async ({ sampleId, newPrice }: { sampleId: string; newPrice: number }) => {
       if (!account?.address) {
         throw new Error("Please connect your wallet first")
