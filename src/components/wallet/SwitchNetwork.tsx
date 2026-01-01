@@ -5,7 +5,7 @@ import { IoCheckmarkCircle, IoWarning } from "react-icons/io5";
 import { useCasperWallet } from "../../providers/WalletProvider";
 
 // Get network from environment
-const CASPER_NETWORK = import.meta.env.VITE_CASPER_NETWORK || "testnet";
+const CASPER_NETWORK = import.meta.env.PUBLIC_VITE_CASPER_NETWORK || "testnet";
 const isMainnet = CASPER_NETWORK === "mainnet";
 
 export function SwitchNetwork() {

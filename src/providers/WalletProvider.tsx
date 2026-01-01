@@ -40,12 +40,12 @@ const CASPER_NETWORK = {
   testnet: {
     name: "Casper Testnet",
     chainName: "casper-test",
-    rpcUrl: "https://rpc.testnet.casperlabs.io/rpc",
+    rpcUrl: import.meta.env.PUBLIC_VITE_CASPER_RPC_URL || "https://node.testnet.casper.network/rpc",
   },
   mainnet: {
     name: "Casper Mainnet",
     chainName: "casper",
-    rpcUrl: "https://rpc.mainnet.casperlabs.io/rpc",
+    rpcUrl: "https://node.mainnet.cspr.cloud/rpc",
   },
 };
 
@@ -55,6 +55,13 @@ const getCurrentNetwork = () => {
   return env === "mainnet" ? CASPER_NETWORK.mainnet : CASPER_NETWORK.testnet;
 };
 
+// Signature response from Casper Wallet
+interface SignatureResponse {
+  cancelled: boolean;
+  signatureHex?: string;
+  signature?: Uint8Array;
+}
+
 // Type for window.CasperWalletProvider
 declare global {
   interface Window {
@@ -62,7 +69,7 @@ declare global {
       requestConnection: () => Promise<boolean>;
       disconnectFromSite: () => Promise<boolean>;
       getActivePublicKey: () => Promise<string>;
-      signDeploy: (deployJson: string, publicKey: string) => Promise<string>;
+      sign: (deployJson: string, publicKey: string) => Promise<SignatureResponse>;
       isConnected: () => Promise<boolean>;
     };
     CasperWalletEventTypes?: {
@@ -219,8 +226,25 @@ export const WalletProvider = ({ children }: PropsWithChildren) => {
       throw new Error("Wallet not connected");
     }
 
-    const signature = await provider.signDeploy(deployJson, account.address);
-    return signature;
+    const response = await provider.sign(deployJson, account.address);
+
+    if (response.cancelled) {
+      throw new Error("Signing was cancelled by user");
+    }
+
+    if (!response.signatureHex) {
+      throw new Error("No signature returned from wallet");
+    }
+
+    // Parse the deploy, add the signature to approvals, and return
+    const deploy = JSON.parse(deployJson);
+    deploy.approvals = deploy.approvals || [];
+    deploy.approvals.push({
+      signer: account.address,
+      signature: response.signatureHex,
+    });
+
+    return JSON.stringify(deploy);
   }, [getProvider, account]);
 
   const value: CasperWalletContextType = {

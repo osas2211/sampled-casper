@@ -180,7 +180,7 @@ export function WalletSelectionModal({
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
               <p className="text-grey-400 text-xs">
-                Connecting to {import.meta.env.VITE_CASPER_NETWORK === "mainnet" ? "Casper Mainnet" : "Casper Testnet"}
+                Connecting to {import.meta.env.PUBLIC_VITE_CASPER_NETWORK === "mainnet" ? "Casper Mainnet" : "Casper Testnet"}
               </p>
             </div>
           </div>

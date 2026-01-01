@@ -16,7 +16,7 @@ import { fetchBalance, formatBalance, type Balance } from "../util/wallet";
 import { toast } from "sonner";
 
 // Casper explorer URL
-const CASPER_EXPLORER_URL = import.meta.env.VITE_CASPER_NETWORK === "mainnet"
+const CASPER_EXPLORER_URL = import.meta.env.PUBLIC_VITE_CASPER_NETWORK === "mainnet"
   ? "https://cspr.live"
   : "https://testnet.cspr.live";
 

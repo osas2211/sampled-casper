@@ -416,7 +416,7 @@ const UploadUI: React.FC<UploadUIProps> = ({ platformFeePercentage = 10 }) => {
         icon: <BsCheckCircleFill />,
         action: (
           <Link
-            to={`https://testnet.cspr.live/txn/${response?.hash}`}
+            to={`https://testnet.cspr.live/transaction/${response?.deployHash}`}
             target="_blank"
             className="underline font-semibold"
           >
