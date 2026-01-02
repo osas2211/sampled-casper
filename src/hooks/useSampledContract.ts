@@ -19,7 +19,7 @@ import {
 } from "casper-js-sdk"
 
 // Casper Network Configuration
-const CASPER_RPC_URL = import.meta.env.PUBLIC_VITE_CASPER_RPC_URL || "https://node.testnet.casper.network/rpc"
+const CASPER_RPC_URL = import.meta.env.PUBLIC_VITE_CASPER_RPC_URL || "https://node.testnet.cspr.cloud/rpc"
 const CSPR_CLOUD_ACCESS_TOKEN = import.meta.env.PUBLIC_VITE_CSPR_CLOUD_ACCESS_TOKEN || ""
 const CHAIN_NAME = import.meta.env.PUBLIC_VITE_CASPER_CHAIN_NAME || "casper-test"
 const CONTRACT_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_HASH || ""

@@ -34,7 +34,7 @@ const CASPER_NETWORK = {
   testnet: {
     name: "Casper Testnet",
     chainName: "casper-test",
-    rpcUrl: import.meta.env.PUBLIC_VITE_CASPER_RPC_URL || "https://node.testnet.casper.network/rpc",
+    rpcUrl: import.meta.env.PUBLIC_VITE_CASPER_RPC_URL || "https://node.testnet.cspr.cloud/rpc",
   },
   mainnet: {
     name: "Casper Mainnet",
