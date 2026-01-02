@@ -9,12 +9,6 @@ import {
 import { PublicKey } from "casper-js-sdk";
 
 // Casper Wallet types
-interface CasperWalletState {
-  isConnected: boolean;
-  activeKey: string | null;
-  isLocked: boolean;
-}
-
 interface CasperWalletEventDetail {
   isConnected?: boolean;
   activeKey?: string;

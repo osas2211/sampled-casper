@@ -23,7 +23,7 @@ export const WithdrawEarningsModal = () => {
     
 
     mutate(undefined, {
-      onSuccess: async (data) => {
+      onSuccess: async (response) => {
         // Refetch purchase status
         toast.success("Success", {
           className: "!bg-primary !border-0",
@@ -32,7 +32,7 @@ export const WithdrawEarningsModal = () => {
           icon: <BsCheckCircleFill />,
           action: (
             <Link
-              to={`https://testnet.cspr.live/txn/${data?.hash}`}
+              to={`https://testnet.cspr.live/transaction/${response?.deployHash}`}
               target="_blank"
               className="underline font-semibold"
             >

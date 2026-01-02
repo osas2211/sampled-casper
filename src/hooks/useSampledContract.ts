@@ -26,10 +26,6 @@ const CONTRACT_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_HASH || ""
 
 // Gas costs (in motes - 1 CSPR = 10^9 motes)
 const GAS_UPLOAD_SAMPLE = "10000000000" // 10 CSPR
-const GAS_PURCHASE_SAMPLE = "15000000000" // 15 CSPR
-const GAS_UPDATE_PRICE = "5000000000" // 5 CSPR
-const GAS_WITHDRAW = "5000000000" // 5 CSPR
-const GAS_DEACTIVATE = "5000000000" // 5 CSPR
 
 // Default TTL for deploys (30 minutes)
 const DEFAULT_TTL = 1800000
@@ -463,11 +459,11 @@ export const useGetSample = (sample_id: string) => {
 }
 
 export const usePurchaseSample = () => {
-  const { account, signDeploy } = useCasperWallet()
+  const { account } = useCasperWallet()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (sampleId: string): Promise<IPurchaseSampleResponse> => {
+    mutationFn: async (_sampleId: string): Promise<IPurchaseSampleResponse> => {
       if (!account) {
         throw new Error("Please connect your wallet first")
       }
@@ -594,11 +590,11 @@ export const useGetUserEarnings = () => {
 }
 
 export const useWithdrawEarnings = () => {
-  const { account, signDeploy } = useCasperWallet()
+  const { account } = useCasperWallet()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<{ deployHash: string }> => {
       if (!account?.address) {
         throw new Error("Please connect your wallet first")
       }
@@ -622,7 +618,7 @@ export const useWithdrawEarnings = () => {
 
 
 export const useUpdatePrice = () => {
-  const { account, signDeploy } = useCasperWallet()
+  const { account } = useCasperWallet()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -651,11 +647,11 @@ export const useUpdatePrice = () => {
 }
 
 export const useDeactivateSample = () => {
-  const { account, signDeploy } = useCasperWallet()
+  const { account } = useCasperWallet()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (sampleId: string) => {
+    mutationFn: async (_sampleId: string) => {
       if (!account?.address) {
         throw new Error("Please connect your wallet first")
       }
