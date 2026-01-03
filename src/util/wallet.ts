@@ -1,3 +1,5 @@
+import { CLPublicKey } from "casper-js-sdk"
+
 export type Balance = {
   asset_type: string
   balance: string
@@ -6,7 +8,7 @@ export type Balance = {
 }
 
 // Casper Network configuration
-const CASPER_RPC_URL = import.meta.env.PUBLIC_PUBLIC_VITE_CASPER_RPC_URL || "https://rpc.testnet.casperlabs.io/rpc"
+const CASPER_RPC_URL = import.meta.env.PUBLIC_PUBLIC_VITE_CASPER_RPC_URL || "/api/rpc"
 
 // CSPR has 9 decimals (motes)
 const CSPR_DECIMALS = 9
@@ -33,20 +35,52 @@ async function rpcCall<T>(method: string, params: unknown[]): Promise<T> {
 
 export const fetchBalance = async (address: string): Promise<Balance[]> => {
   try {
-    // Use query_balance RPC (Casper 2.0 compatible)
-    interface QueryBalanceResult {
-      balance: string
+    // Convert public key hex to account hash
+    const publicKey = CLPublicKey.fromHex(address)
+    const accountHash = Buffer.from(publicKey.toAccountHash()).toString("hex")
+
+    // Get the latest state root hash first
+    interface StateRootResult {
+      state_root_hash: string
     }
 
-    const result = await rpcCall<QueryBalanceResult>("query_balance", [
-      {
-        purse_identifier: {
-          main_purse_under_public_key: address,
-        },
-      },
+    const stateRootResult = await rpcCall<StateRootResult>("chain_get_state_root_hash", [])
+    const stateRootHash = stateRootResult.state_root_hash
+
+    // Get account info to find the main purse URef
+    interface AccountInfo {
+      Account?: {
+        main_purse: string
+      }
+    }
+
+    interface StateItemResult {
+      stored_value: AccountInfo
+    }
+
+    const accountResult = await rpcCall<StateItemResult>("state_get_item", [
+      stateRootHash,
+      `account-hash-${accountHash}`,
+      [],
     ])
 
-    const balanceInMotes = result.balance || "0"
+    const mainPurse = accountResult.stored_value?.Account?.main_purse
+
+    if (!mainPurse) {
+      throw new Error("Account not found or has no main purse")
+    }
+
+    // Query the balance using the purse URef
+    interface BalanceResult {
+      balance_value: string
+    }
+
+    const balanceResult = await rpcCall<BalanceResult>("state_get_balance", [
+      stateRootHash,
+      mainPurse,
+    ])
+
+    const balanceInMotes = balanceResult.balance_value || "0"
     const balanceInCspr = Number(balanceInMotes) / Math.pow(10, CSPR_DECIMALS)
 
     return [

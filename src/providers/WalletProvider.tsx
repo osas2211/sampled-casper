@@ -6,7 +6,7 @@ import {
   useCallback,
   PropsWithChildren,
 } from "react";
-import { PublicKey } from "casper-js-sdk";
+import { CLPublicKey } from "casper-js-sdk";
 
 // Casper Wallet types
 interface CasperWalletEventDetail {
@@ -18,7 +18,7 @@ interface CasperWalletEventDetail {
 
 // Context type
 export interface CasperWalletContextType {
-  account: { address: string; publicKey: PublicKey } | null;
+  account: { address: string; publicKey: CLPublicKey } | null;
   connected: boolean;
   isLoading: boolean;
   connect: () => Promise<void>;
@@ -34,7 +34,7 @@ const CASPER_NETWORK = {
   testnet: {
     name: "Casper Testnet",
     chainName: "casper-test",
-    rpcUrl: import.meta.env.PUBLIC_VITE_CASPER_RPC_URL || "https://node.testnet.cspr.cloud/rpc",
+    rpcUrl: import.meta.env.PUBLIC_VITE_CASPER_RPC_URL || "https://node.testnet.casper.network/rpc",
   },
   mainnet: {
     name: "Casper Mainnet",
@@ -76,8 +76,9 @@ declare global {
   }
 }
 
+
 export const WalletProvider = ({ children }: PropsWithChildren) => {
-  const [account, setAccount] = useState<{ address: string; publicKey: PublicKey } | null>(null);
+  const [account, setAccount] = useState<{ address: string; publicKey: CLPublicKey } | null>(null);
   const [connected, setConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const network = getCurrentNetwork();
@@ -100,9 +101,10 @@ export const WalletProvider = ({ children }: PropsWithChildren) => {
           if (isConnected) {
             const activeKey = await provider.getActivePublicKey();
             if (activeKey) {
-              const publicKey = PublicKey.fromHex(activeKey);
+              console.log("Wallet returned public key:", activeKey, "length:", activeKey.length);
+              const publicKey = CLPublicKey.fromHex(activeKey);
               setAccount({
-                address: activeKey,
+                address: publicKey.toHex(),
                 publicKey,
               });
               setConnected(true);
@@ -139,9 +141,10 @@ export const WalletProvider = ({ children }: PropsWithChildren) => {
 
       if (activeKey) {
         try {
-          const publicKey = PublicKey.fromHex(activeKey);
+          console.log("Wallet event public key:", activeKey, "length:", activeKey.length);
+          const publicKey = CLPublicKey.fromHex(activeKey);
           setAccount({
-            address: activeKey,
+            address: publicKey.toHex(),
             publicKey,
           });
           setConnected(true);
@@ -184,9 +187,10 @@ export const WalletProvider = ({ children }: PropsWithChildren) => {
       if (connected) {
         const activeKey = await provider.getActivePublicKey();
         if (activeKey) {
-          const publicKey = PublicKey.fromHex(activeKey);
+          console.log("Connect wallet public key:", activeKey, "length:", activeKey.length);
+          const publicKey = CLPublicKey.fromHex(activeKey);
           setAccount({
-            address: activeKey,
+            address: publicKey.toHex(),
             publicKey,
           });
           setConnected(true);
@@ -230,12 +234,25 @@ export const WalletProvider = ({ children }: PropsWithChildren) => {
       throw new Error("No signature returned from wallet");
     }
 
-    // Parse the deploy, add the signature to approvals, and return
-    const deploy = JSON.parse(deployJson);
+    // Parse the deploy - handle both nested and flat structures
+    const parsed = JSON.parse(deployJson);
+    const deploy = parsed.deploy || parsed;
+
+    // Get the algorithm tag from the public key (first 2 chars)
+    const algoTag = account.address.slice(0, 2);
+
+    // Normalize signature - add algorithm tag if not present
+    let signature = response.signatureHex.toLowerCase();
+    if (signature.length === 128) {
+      // Raw 64-byte signature, add algorithm tag
+      signature = algoTag + signature;
+    }
+
+    // Add the signature to approvals
     deploy.approvals = deploy.approvals || [];
     deploy.approvals.push({
       signer: account.address,
-      signature: response.signatureHex,
+      signature: signature,
     });
 
     return JSON.stringify(deploy);

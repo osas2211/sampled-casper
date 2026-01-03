@@ -6,23 +6,23 @@ import { toast } from "sonner"
 import { IoCloseCircleSharp } from "react-icons/io5"
 import { useCasperWallet } from "../providers/WalletProvider"
 import {
-  Deploy,
-  DeployHeader,
-  ExecutableDeployItem,
-  StoredContractByHash,
-  Args,
-  PublicKey,
-  CLValue,
-  ContractHash,
-  Duration,
-  Timestamp,
+  DeployUtil,
+  RuntimeArgs,
+  CLValueBuilder,
+  CLPublicKey,
+  CasperClient
 } from "casper-js-sdk"
+import axios from "axios"
+
 
 // Casper Network Configuration
-const CASPER_RPC_URL = import.meta.env.PUBLIC_VITE_CASPER_RPC_URL || "https://node.testnet.cspr.cloud/rpc"
-const CSPR_CLOUD_ACCESS_TOKEN = import.meta.env.PUBLIC_VITE_CSPR_CLOUD_ACCESS_TOKEN || ""
+const CASPER_RPC_URL = "/api/rpc"
 const CHAIN_NAME = import.meta.env.PUBLIC_VITE_CASPER_CHAIN_NAME || "casper-test"
 const CONTRACT_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_HASH || ""
+
+// Odra contract URefs (from contract named_keys)
+const EVENTS_UREF = "uref-cd62b44c88370b693d10df5dd27148659078947b762965ae43916f76a14016f3-007"
+const EVENTS_LENGTH_UREF = "uref-963907b815a26a008ab24f0a144eb8dee0cf5aca2b75de0e9be9d98b66333014-007"
 
 // Gas costs (in motes - 1 CSPR = 10^9 motes)
 const GAS_UPLOAD_SAMPLE = "10000000000" // 10 CSPR
@@ -57,15 +57,10 @@ async function rpcCall<T>(method: string, params: unknown[]): Promise<T> {
     "Content-Type": "application/json",
   }
 
-  // Add Authorization header for CSPR.cloud
-  if (CSPR_CLOUD_ACCESS_TOKEN) {
-    headers["Authorization"] = CSPR_CLOUD_ACCESS_TOKEN
-  }
-
-  const response = await fetch(CASPER_RPC_URL, {
+  const response = await axios(CASPER_RPC_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    data: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),
       method,
@@ -73,11 +68,26 @@ async function rpcCall<T>(method: string, params: unknown[]): Promise<T> {
     }),
   })
 
-  const data = await response.json()
+  const data = await response.data
   if (data.error) {
     throw new Error(data.error.message || "RPC Error")
   }
   return data.result
+}
+
+// Cache for state root hash (refreshes every 30 seconds)
+let cachedStateRootHash: { hash: string; timestamp: number } | null = null
+const STATE_ROOT_CACHE_TTL = 30000 // 30 seconds
+
+async function getStateRootHash(): Promise<string> {
+  const now = Date.now()
+  if (cachedStateRootHash && now - cachedStateRootHash.timestamp < STATE_ROOT_CACHE_TTL) {
+    return cachedStateRootHash.hash
+  }
+
+  const result = await rpcCall<{ state_root_hash: string }>("chain_get_state_root_hash", [])
+  cachedStateRootHash = { hash: result.state_root_hash, timestamp: now }
+  return result.state_root_hash
 }
 
 /** Helper to wait for deploy execution (supports both v1 and v2 response formats) */
@@ -125,32 +135,45 @@ const waitForDeploy = async (deployHash: string, timeout = 120000): Promise<void
   throw new Error("Deploy execution timeout")
 }
 
+/** Convert hex string to Uint8Array */
+const hexToUint8Array = (hex: string): Uint8Array => {
+  const cleanHex = hex.replace(/^0x/, "")
+  const bytes = new Uint8Array(cleanHex.length / 2)
+  for (let i = 0; i < cleanHex.length; i += 2) {
+    bytes[i / 2] = parseInt(cleanHex.substring(i, i + 2), 16)
+  }
+  return bytes
+}
+
 /** Build a contract call deploy */
 const buildContractCallDeploy = (
-  publicKey: PublicKey,
+  publicKey: CLPublicKey,
   entryPoint: string,
-  args: Args,
+  args: RuntimeArgs,
   paymentAmount: string
-): Deploy => {
+): DeployUtil.Deploy => {
+  // Convert contract hash hex to Uint8Array
+  const contractHashBytes = hexToUint8Array(CONTRACT_HASH)
+
   // Create session with stored contract by hash
-  const contractHash = ContractHash.newContract(CONTRACT_HASH)
-  const storedContract = new StoredContractByHash(contractHash, entryPoint, args)
-  const session = new ExecutableDeployItem()
-  session.storedContractByHash = storedContract
-
-  const payment = ExecutableDeployItem.standardPayment(paymentAmount)
-
-  // Create deploy header
-  const header = new DeployHeader(
-    CHAIN_NAME,
-    [], // dependencies
-    1, // gasPrice
-    new Timestamp(new Date()),
-    new Duration(DEFAULT_TTL),
-    publicKey
+  const session = DeployUtil.ExecutableDeployItem.newStoredContractByHash(
+    contractHashBytes,
+    entryPoint,
+    args
   )
 
-  return Deploy.makeDeploy(header, payment, session)
+  // Create standard payment
+  const payment = DeployUtil.standardPayment(paymentAmount)
+
+  // Create deploy params
+  const deployParams = new DeployUtil.DeployParams(
+    publicKey,
+    CHAIN_NAME,
+    1, // gasPrice
+    DEFAULT_TTL
+  )
+
+  return DeployUtil.makeDeploy(deployParams, session, payment)
 }
 
 /** Send a signed deploy to the network */
@@ -158,7 +181,7 @@ const sendDeploy = async (signedDeployJson: string): Promise<string> => {
   const signedDeploy = JSON.parse(signedDeployJson)
 
   const result = await rpcCall<{ deploy_hash: string }>("account_put_deploy", [
-    { deploy: signedDeploy },
+    signedDeploy,
   ])
 
   return result.deploy_hash
@@ -170,6 +193,8 @@ const queryContractState = async <T>(
   key: string
 ): Promise<T | null> => {
   try {
+    const stateRootHash = await getStateRootHash()
+
     interface StateResult {
       stored_value: {
         CLValue?: { parsed: T }
@@ -177,7 +202,7 @@ const queryContractState = async <T>(
     }
 
     const result = await rpcCall<StateResult>("state_get_item", [
-      null, // state_root_hash (null for latest)
+      stateRootHash,
       `hash-${contractHash}`,
       [key],
     ])
@@ -195,8 +220,10 @@ const queryContractDictionary = async <T>(
   dictionaryItemKey: string
 ): Promise<T | null> => {
   try {
+    const stateRootHash = await getStateRootHash()
+
     const result = await rpcCall<any>("state_get_dictionary_item", [
-      null,
+      stateRootHash,
       {
         ContractNamedKey: {
           key: `hash-${CONTRACT_HASH}`,
@@ -261,43 +288,150 @@ const parseSampleFromContract = (data: any): ISample | null => {
   }
 }
 
-/** Get the total sample count from the contract */
-const getSampleCount = async (): Promise<number> => {
+/** Get the events count from the contract */
+const getEventsCount = async (): Promise<number> => {
   try {
+    const stateRootHash = await getStateRootHash()
+
+    // Query the __events_length URef directly
     const result = await rpcCall<any>("query_global_state", [
-      null,
-      `hash-${CONTRACT_HASH}`,
-      ["sample_count"],
+      { StateRootHash: stateRootHash },
+      EVENTS_LENGTH_UREF,
+      [],
     ])
 
     const count = result?.stored_value?.CLValue?.parsed
     return typeof count === "number" ? count : parseInt(count || "0", 10)
   } catch (error) {
-    console.error("Error getting sample count:", error)
+    console.log("Events count query returned 0")
     return 0
   }
 }
 
-/** Fetch all samples from the contract */
+/** Parse a SampleUploaded event from raw bytes */
+const parseSampleUploadedEvent = (bytes: number[]): ISample | null => {
+  try {
+    let offset = 0
+
+    // Read event name length (u32 little-endian)
+    const nameLen = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 4
+
+    // Read event name
+    const eventName = String.fromCharCode(...bytes.slice(offset, offset + nameLen))
+    offset += nameLen
+
+    // Check if this is a SampleUploaded event
+    if (eventName !== "event_SampleUploaded") {
+      return null
+    }
+
+    // Read sample_id (u64 little-endian)
+    const sampleId = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 8
+
+    // Read seller (Key type: 1 byte type tag + 32 bytes hash)
+    offset += 1 // Skip type tag (0 = Account)
+    const sellerBytes = bytes.slice(offset, offset + 32)
+    const seller = Array.from(sellerBytes).map(b => b.toString(16).padStart(2, '0')).join('')
+    offset += 32
+
+    // Read price (U512: 1 byte length + value bytes)
+    const priceLen = bytes[offset]
+    offset += 1
+    let price = BigInt(0)
+    for (let i = 0; i < priceLen; i++) {
+      price += BigInt(bytes[offset + i]) << BigInt(i * 8)
+    }
+    offset += priceLen
+
+    // Read title (string: u32 length + chars)
+    const titleLen = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 4
+    const title = String.fromCharCode(...bytes.slice(offset, offset + titleLen))
+    offset += titleLen
+
+    // Read ipfs_link (string: u32 length + chars)
+    const ipfsLen = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 4
+    const ipfs_link = String.fromCharCode(...bytes.slice(offset, offset + ipfsLen))
+    offset += ipfsLen
+
+    // Read cover_image (string: u32 length + chars)
+    const coverLen = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 4
+    const cover_image = String.fromCharCode(...bytes.slice(offset, offset + coverLen))
+    offset += coverLen
+
+    // Read timestamp (u64)
+    const timestamp = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+
+    return {
+      sample_id: String(sampleId),
+      seller: seller,
+      price: price.toString(),
+      ipfs_link,
+      title,
+      bpm: "0",
+      genre: "",
+      cover_image,
+      video_preview_link: "",
+      total_sales: "0",
+      is_active: true,
+      created_at: String(timestamp),
+    }
+  } catch (error) {
+    console.error("Error parsing SampleUploaded event:", error)
+    return null
+  }
+}
+
+/** Query a single event by index */
+const queryEvent = async (index: number): Promise<number[] | null> => {
+  try {
+    const stateRootHash = await getStateRootHash()
+
+    const result = await rpcCall<any>("state_get_dictionary_item", [
+      stateRootHash,
+      {
+        URef: {
+          seed_uref: EVENTS_UREF,
+          dictionary_item_key: String(index),
+        },
+      },
+    ])
+
+    return result?.stored_value?.CLValue?.parsed || null
+  } catch (error) {
+    console.error(`Error querying event ${index}:`, error)
+    return null
+  }
+}
+
+/** Fetch all samples from contract events */
 const fetchAllSamples = async (): Promise<ISample[]> => {
   const samples: ISample[] = []
+  const seenIds = new Set<string>()
 
   try {
-    const count = await getSampleCount()
-    console.log("Total sample count:", count)
+    const eventsCount = await getEventsCount()
+    console.log("Total events count:", eventsCount)
 
-    if (count === 0) return samples
+    if (eventsCount === 0) return samples
 
-    // Fetch each sample by ID (samples are 1-indexed)
-    for (let id = 1; id <= count; id++) {
+    // Fetch each event and filter for SampleUploaded
+    for (let i = 0; i < eventsCount; i++) {
       try {
-        const data = await queryContractDictionary<any>("samples", String(id))
-        const sample = parseSampleFromContract(data)
-        if (sample && sample.is_active) {
-          samples.push(sample)
+        const eventBytes = await queryEvent(i)
+        if (eventBytes) {
+          const sample = parseSampleUploadedEvent(eventBytes)
+          if (sample && !seenIds.has(sample.sample_id)) {
+            seenIds.add(sample.sample_id)
+            samples.push(sample)
+          }
         }
       } catch (error) {
-        console.error(`Error fetching sample ${id}:`, error)
+        console.error(`Error fetching event ${i}:`, error)
       }
     }
   } catch (error) {
@@ -322,14 +456,14 @@ export const useUploadSample = () => {
       }
 
       // Build arguments for upload_sample entry point
-      const args = Args.fromMap({
-        price: CLValue.newCLUInt512(request.price.toString()),
-        ipfs_link: CLValue.newCLString(request.ipfs_link),
-        title: CLValue.newCLString(request.title),
-        bpm: CLValue.newCLUint64(request.bpm),
-        genre: CLValue.newCLString(request.genre),
-        cover_image: CLValue.newCLString(request.cover_image),
-        video_preview_link: CLValue.newCLString(request.video_preview_link || ""),
+      const args = RuntimeArgs.fromMap({
+        price: CLValueBuilder.u512(request.price.toString()),
+        ipfs_link: CLValueBuilder.string(request.ipfs_link),
+        title: CLValueBuilder.string(request.title),
+        bpm: CLValueBuilder.u64(request.bpm),
+        genre: CLValueBuilder.string(request.genre),
+        cover_image: CLValueBuilder.string(request.cover_image),
+        video_preview_link: CLValueBuilder.string(request.video_preview_link || ""),
       })
 
       // Build the deploy
@@ -341,7 +475,7 @@ export const useUploadSample = () => {
       )
 
       // Convert deploy to JSON for signing
-      const deployJson = JSON.stringify(Deploy.toJSON(deploy))
+      const deployJson = JSON.stringify(DeployUtil.deployToJson(deploy))
 
       // Sign the deploy using the wallet
       const signedDeployJson = await signDeploy(deployJson)
