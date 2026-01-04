@@ -4,6 +4,7 @@ import { Avatar, Button, Modal } from "antd";
 import { useState } from "react";
 import { BiCoinStack } from "react-icons/bi";
 import {
+  csprToMotes,
   motesToCspr,
   useGetUserEarnings,
   useWithdrawEarnings,
@@ -70,7 +71,7 @@ export const WithdrawEarningsModal = () => {
             <p>Amount to withdraw:</p>
             <div className="flex items-center gap-2 mt-2">
               <Avatar src="/assets/images/casper-logo.png" size={24} />
-              <p className="text-lg">{motesToCspr(earnings || 0)} CSPR</p>
+              <p className="text-lg">{motesToCspr(csprToMotes(earnings ?? 0))} CSPR</p>
             </div>
           </div>
           <div className="bg-amber-500/10 p-3 rounded-lg">

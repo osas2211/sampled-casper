@@ -5,6 +5,7 @@ import { useWalletBalance } from "../../hooks/useWalletBalance";
 // TODO: Define Sample type for Casper
 
 import {
+  getAccountHashFromPublicKey,
   motesToCspr,
   useHasPurchased,
   usePurchaseSample,
@@ -17,15 +18,16 @@ import { ISample } from "../../@types/sample"
 import { useCasperWallet } from "../../providers/WalletProvider"
 
 export const PurchaseSampleTab = ({ sample }: { sample: ISample }) => {
-  const { balances, updateBalance } = useWalletBalance();
+  const { balances, updateBalance, } = useWalletBalance();
   const { data: hasPurchased, refetch: refetchPurchaseStatus } =
     useHasPurchased(sample?.sample_id);
   console.log(hasPurchased)
   const { mutate: purchaseSample, isPending: isPurchasing } =
     usePurchaseSample();
   const { account } = useCasperWallet();
+  const userAccountHash = getAccountHashFromPublicKey(account?.address!!)
   const address = account?.address
-  const isSeller = address === sample?.seller;
+  const isSeller = userAccountHash === sample?.seller;
 
   const handlePurchase = async () => {
     if (!address) {
@@ -50,7 +52,7 @@ export const PurchaseSampleTab = ({ sample }: { sample: ISample }) => {
           icon: <BsCheckCircleFill />,
           action: (
             <Link
-              to={`https://testnet.cspr.live/txn/${data?.transactionHash}`}
+              to={`https://testnet.cspr.live/transaction/${data?.transactionHash}`}
               target="_blank"
               className="underline font-semibold"
             >
@@ -77,10 +79,12 @@ export const PurchaseSampleTab = ({ sample }: { sample: ISample }) => {
         <div className="flex items-center gap-2">
           <p className="md:text-lg">Purchase</p>
         </div>
-        <p>
+        {
+          !balances[0]?.balance ? <span className="italics">Loading balance...</span> : <p>
           <span className="text-grey-300">Balance:</span>{" "}
           {Number(Number(balances[0]?.balance).toFixed(3)).toLocaleString()} CSPR
         </p>
+        }
       </div>
 
       <div className="flex gap-2 items-center">

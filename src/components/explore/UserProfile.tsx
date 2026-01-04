@@ -6,6 +6,7 @@ import { MdOutlineArrowForward } from "react-icons/md";
 import { Link } from "react-router-dom";
 import { truncateString } from "../../util/string-helpers";
 import {
+  csprToMotes,
   motesToCspr,
   useGetUserEarnings,
   useGetUserSamples,
@@ -74,7 +75,7 @@ export const UserProfile = () => {
           <div>
             <p className="text-sm text-white/80">Earnings</p>
             <p className="text-[17px] font-semibold">
-              {motesToCspr(earnings ?? 0)} CSPR
+              {motesToCspr(csprToMotes(earnings ?? 0))} CSPR
             </p>
           </div>
           <div>

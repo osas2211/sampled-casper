@@ -10,7 +10,6 @@ import {
   RuntimeArgs,
   CLValueBuilder,
   CLPublicKey,
-  CasperClient
 } from "casper-js-sdk"
 import axios from "axios"
 
@@ -19,6 +18,7 @@ import axios from "axios"
 const CASPER_RPC_URL = "/api/rpc"
 const CHAIN_NAME = import.meta.env.PUBLIC_VITE_CASPER_CHAIN_NAME || "casper-test"
 const CONTRACT_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_HASH || ""
+const CONTRACT_PACKAGE_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_PACKAGE_HASH || ""
 
 // Odra contract URefs (from contract named_keys)
 const EVENTS_UREF = "uref-cd62b44c88370b693d10df5dd27148659078947b762965ae43916f76a14016f3-007"
@@ -26,13 +26,81 @@ const EVENTS_LENGTH_UREF = "uref-963907b815a26a008ab24f0a144eb8dee0cf5aca2b75de0
 
 // Gas costs (in motes - 1 CSPR = 10^9 motes)
 const GAS_UPLOAD_SAMPLE = "10000000000" // 10 CSPR
-const GAS_PURCHASE_SAMPLE = "15000000000" // 15 CSPR (includes transfer overhead)
+const GAS_PURCHASE_SAMPLE = "25000000000" // 25 CSPR (includes proxy caller + transfer overhead)
 const GAS_WITHDRAW_EARNINGS = "5000000000" // 5 CSPR
 const GAS_UPDATE_PRICE = "3000000000" // 3 CSPR
 const GAS_DEACTIVATE_SAMPLE = "3000000000" // 3 CSPR
 
 // Default TTL for deploys (30 minutes)
 const DEFAULT_TTL = 1800000
+
+// Cache for proxy caller WASM
+let proxyCallerWasmCache: Uint8Array | null = null
+
+/** Load the proxy caller WASM for payable function calls */
+const loadProxyCallerWasm = async (): Promise<Uint8Array> => {
+  if (proxyCallerWasmCache) {
+    return proxyCallerWasmCache
+  }
+
+  const response = await fetch("/wasm/proxy_caller.wasm")
+  if (!response.ok) {
+    throw new Error("Failed to load proxy_caller.wasm")
+  }
+
+  const arrayBuffer = await response.arrayBuffer()
+  proxyCallerWasmCache = new Uint8Array(arrayBuffer)
+  return proxyCallerWasmCache
+}
+
+/** Build a payable contract call deploy using proxy_caller */
+const buildPayableContractCallDeploy = async (
+  publicKey: CLPublicKey,
+  entryPoint: string,
+  functionArgs: RuntimeArgs,
+  attachedValue: string,
+  paymentAmount: string
+): Promise<DeployUtil.Deploy> => {
+  // Load proxy caller WASM
+  const proxyCallerWasm = await loadProxyCallerWasm()
+
+  // Convert contract package hash hex to Uint8Array (32 bytes)
+  const packageHashBytes = hexToUint8Array(CONTRACT_PACKAGE_HASH)
+
+  // Serialize the function args to bytes and convert to List<U8> (Bytes type)
+  const argsBytes = functionArgs.toBytes().unwrap()
+  const argsBytesAsList = CLValueBuilder.list(
+    Array.from(argsBytes).map(byte => CLValueBuilder.u8(byte))
+  )
+
+  // Build proxy caller arguments
+  const proxyArgs = RuntimeArgs.fromMap({
+    contract_package_hash: CLValueBuilder.byteArray(packageHashBytes),
+    entry_point: CLValueBuilder.string(entryPoint),
+    args: argsBytesAsList, // Bytes type (List<U8>)
+    attached_value: CLValueBuilder.u512(attachedValue),
+    amount: CLValueBuilder.u512(attachedValue), // Required for main purse access
+  })
+
+  // Create session using module bytes (proxy_caller.wasm)
+  const session = DeployUtil.ExecutableDeployItem.newModuleBytes(
+    proxyCallerWasm,
+    proxyArgs
+  )
+
+  // Create standard payment
+  const payment = DeployUtil.standardPayment(paymentAmount)
+
+  // Create deploy params
+  const deployParams = new DeployUtil.DeployParams(
+    publicKey,
+    CHAIN_NAME,
+    1, // gasPrice
+    DEFAULT_TTL
+  )
+
+  return DeployUtil.makeDeploy(deployParams, session, payment)
+}
 
 export interface IPurchaseSamplePayload {
   buyer: string
@@ -192,6 +260,7 @@ const sendDeploy = async (signedDeployJson: string): Promise<string> => {
 }
 
 /** Helper to query contract state */
+// @ts-expect-error - Reserved for future use
 const queryContractState = async <T>(
   contractHash: string,
   key: string
@@ -219,6 +288,7 @@ const queryContractState = async <T>(
 }
 
 /** Query contract dictionary item */
+// @ts-expect-error - Reserved for future use
 const queryContractDictionary = async <T>(
   dictionaryName: string,
   dictionaryItemKey: string
@@ -245,6 +315,7 @@ const queryContractDictionary = async <T>(
 }
 
 /** Parse Odra Sample from raw contract data */
+// @ts-expect-error - Reserved for future use
 const parseSampleFromContract = (data: any): ISample | null => {
   if (!data) return null
 
@@ -552,7 +623,7 @@ const fetchAllSamples = async (): Promise<ISample[]> => {
 }
 
 /** Get account hash from public key hex */
-const getAccountHashFromPublicKey = (publicKeyHex: string): string => {
+export const getAccountHashFromPublicKey = (publicKeyHex: string): string => {
   try {
     const publicKey = CLPublicKey.fromHex(publicKeyHex)
     const accountHash = Buffer.from(publicKey.toAccountHash()).toString("hex")
@@ -746,17 +817,18 @@ export const usePurchaseSample = () => {
       const price = sample.price // Price in motes
 
       // Build arguments for purchase_sample entry point
-      // Odra payable functions expect an "amount" argument for the payment
+      // Only pass the function-specific args (sample_id)
+      // The proxy_caller handles the cargo_purse for payable functions
       const args = RuntimeArgs.fromMap({
         sample_id: CLValueBuilder.u64(sampleIdNum),
-        amount: CLValueBuilder.u512(price),
       })
 
-      // Build the deploy
-      const deploy = buildContractCallDeploy(
+      // Build the deploy using proxy_caller for payable function
+      const deploy = await buildPayableContractCallDeploy(
         account.publicKey,
         "purchase_sample",
         args,
+        price, // attached_value - the CSPR to send
         GAS_PURCHASE_SAMPLE
       )
 
