@@ -12,9 +12,61 @@ import { Download } from "lucide-react";
 import { downloadAudio } from "../util/download-audio";
 import { useCasperWallet } from "../providers/WalletProvider"
 
+const SamplePageSkeleton = () => {
+  return (
+    <div className="grid md:grid-cols-7 gap-2 min-h-[91vh]">
+      <div className="md:col-span-5">
+        {/* Header skeleton */}
+        <div className="md:h-[19rem] bg-grey-600 rounded-t-xl py-6 pt-9 px-6 flex md:flex-row flex-col md:items-end gap-4 relative">
+          <div className="md:w-[15rem] w-[70%] h-full rounded-md bg-grey-700 animate-pulse" />
+          <div className="relative space-y-3 flex-1">
+            <div className="h-4 w-24 bg-grey-700 rounded animate-pulse" />
+            <div className="h-10 w-64 bg-grey-700 rounded animate-pulse" />
+            <div className="flex gap-2 items-center">
+              <div className="w-10 h-10 rounded-full bg-grey-700 animate-pulse" />
+              <div className="h-4 w-32 bg-grey-700 rounded animate-pulse" />
+            </div>
+          </div>
+        </div>
+
+        {/* Content skeleton */}
+        <div className="min-h-[60vh] bg-gradient-to-b from-grey-700 to-grey-1000 rounded-b-xl md:p-6 p-3 md:space-y-8 space-y-5">
+          <div className="flex items-center gap-5">
+            <div className="w-[60px] h-[60px] rounded-full bg-grey-600 animate-pulse" />
+            <div className="w-7 h-7 bg-grey-600 rounded animate-pulse" />
+            <div className="w-6 h-6 bg-grey-600 rounded animate-pulse" />
+          </div>
+
+          <div className="md:max-w-[25vw] space-y-4">
+            <div className="h-6 w-24 bg-grey-600 rounded animate-pulse" />
+            <div className="space-y-2">
+              <div className="h-4 w-full bg-grey-600 rounded animate-pulse" />
+              <div className="h-4 w-full bg-grey-600 rounded animate-pulse" />
+              <div className="h-4 w-3/4 bg-grey-600 rounded animate-pulse" />
+              <div className="h-4 w-full bg-grey-600 rounded animate-pulse" />
+              <div className="h-4 w-2/3 bg-grey-600 rounded animate-pulse" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Trade panel skeleton */}
+      <div className="md:col-span-2 bg-grey-800 rounded-xl p-4 space-y-4">
+        <div className="h-6 w-32 bg-grey-700 rounded animate-pulse" />
+        <div className="h-10 w-full bg-grey-700 rounded animate-pulse" />
+        <div className="h-12 w-full bg-grey-700 rounded-lg animate-pulse" />
+        <div className="space-y-2 pt-4">
+          <div className="h-4 w-full bg-grey-700 rounded animate-pulse" />
+          <div className="h-4 w-3/4 bg-grey-700 rounded animate-pulse" />
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SamplePage = () => {
   const { id } = useParams();
-  const { data } = useGetSample(id!);
+  const { data, isLoading } = useGetSample(id!);
   const { playTrack, audioPlayer } = useAudioPlayerContext();
   const track = {
     url: data?.ipfs_link ?? "",
@@ -31,6 +83,22 @@ const SamplePage = () => {
   const { account } = useCasperWallet()
   const address = account?.address
   const isSeller = address === data?.seller;
+
+  if (isLoading) {
+    return <SamplePageSkeleton />;
+  }
+
+  if (!data) {
+    return (
+      <div className="flex items-center justify-center min-h-[91vh]">
+        <div className="text-center space-y-4">
+          <h2 className="text-2xl font-semibold text-grey-200">Sample not found</h2>
+          <p className="text-grey-400">The sample you're looking for doesn't exist or has been removed.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="grid md:grid-cols-7 gap-2 min-h-[91vh]">

@@ -26,6 +26,10 @@ const EVENTS_LENGTH_UREF = "uref-963907b815a26a008ab24f0a144eb8dee0cf5aca2b75de0
 
 // Gas costs (in motes - 1 CSPR = 10^9 motes)
 const GAS_UPLOAD_SAMPLE = "10000000000" // 10 CSPR
+const GAS_PURCHASE_SAMPLE = "15000000000" // 15 CSPR (includes transfer overhead)
+const GAS_WITHDRAW_EARNINGS = "5000000000" // 5 CSPR
+const GAS_UPDATE_PRICE = "3000000000" // 3 CSPR
+const GAS_DEACTIVATE_SAMPLE = "3000000000" // 3 CSPR
 
 // Default TTL for deploys (30 minutes)
 const DEFAULT_TTL = 1800000
@@ -718,26 +722,75 @@ export const useGetSample = (sample_id: string) => {
 }
 
 export const usePurchaseSample = () => {
-  const { account } = useCasperWallet()
+  const { account, signDeploy } = useCasperWallet()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (_sampleId: string): Promise<IPurchaseSampleResponse> => {
+    mutationFn: async (sampleId: string): Promise<IPurchaseSampleResponse> => {
       if (!account) {
         throw new Error("Please connect your wallet first")
       }
 
-      // Placeholder - requires contract deployment
-      throw new Error("Contract not yet deployed. Please deploy the contract first and update PUBLIC_VITE_CONTRACT_HASH in .env")
+      if (!CONTRACT_HASH) {
+        throw new Error("Contract hash not configured")
+      }
+
+      // First, get the sample to know the price
+      const allSamples = await fetchAllSamples()
+      const sample = allSamples.find(s => s.sample_id === sampleId)
+      if (!sample) {
+        throw new Error("Sample not found")
+      }
+
+      const sampleIdNum = parseInt(sampleId, 10)
+      const price = sample.price // Price in motes
+
+      // Build arguments for purchase_sample entry point
+      // Odra payable functions expect an "amount" argument for the payment
+      const args = RuntimeArgs.fromMap({
+        sample_id: CLValueBuilder.u64(sampleIdNum),
+        amount: CLValueBuilder.u512(price),
+      })
+
+      // Build the deploy
+      const deploy = buildContractCallDeploy(
+        account.publicKey,
+        "purchase_sample",
+        args,
+        GAS_PURCHASE_SAMPLE
+      )
+
+      // Convert deploy to JSON for signing
+      const deployJson = JSON.stringify(DeployUtil.deployToJson(deploy))
+
+      // Sign the deploy using the wallet
+      const signedDeployJson = await signDeploy(deployJson)
+
+      // Send the signed deploy to the network
+      const deployHash = await sendDeploy(signedDeployJson)
+
+      console.log("Purchase deploy submitted:", deployHash)
+
+      // Wait for the deploy to be executed
+      await waitForDeploy(deployHash)
+
+      console.log("Purchase deploy executed successfully:", deployHash)
+
+      return { transactionHash: deployHash, sample_id: sampleId }
     },
     onSuccess: (data) => {
       console.log("Purchase successful:", data)
+      toast.success("Sample purchased!", {
+        description: "You now have access to this sample.",
+        duration: 5000,
+      })
 
       queryClient.invalidateQueries({ queryKey: ["user-purchases", account?.address] })
-      queryClient.invalidateQueries({ queryKey: ["user-earnings", account?.address] })
-      queryClient.invalidateQueries({
-        queryKey: ["single-sample", data.sample_id],
-      })
+      queryClient.invalidateQueries({ queryKey: ["user-earnings"] })
+      queryClient.invalidateQueries({ queryKey: ["hasPurchased", account?.address, data.sample_id] })
+      queryClient.invalidateQueries({ queryKey: ["single-sample", data.sample_id] })
+      queryClient.invalidateQueries({ queryKey: ["all-samples"] })
+      queryClient.invalidateQueries({ queryKey: ["stats"] })
     },
     onError: (error: Error) => {
       console.log(error)
@@ -825,18 +878,50 @@ export const useGetUserPurchases = () => {
   })
 }
 
+export interface MarketplaceStats {
+  sampleCount: number
+  totalVolume: string // in motes
+  totalVolumeInCspr: number
+  platformFeeCollected: string // in motes
+  platformFeeInCspr: number
+  totalPurchases: number
+}
+
 export const useGetStats = () => {
   return useQuery({
-    queryFn: async () => {
+    queryFn: async (): Promise<MarketplaceStats | null> => {
       if (!CONTRACT_HASH) return null
 
       try {
-        const stats = await queryContractState(
-          CONTRACT_HASH,
-          "marketplace_stats"
-        )
+        // Fetch all samples and purchases from events
+        const [allSamples, allPurchases] = await Promise.all([
+          fetchAllSamples(),
+          fetchAllPurchases(),
+        ])
 
-        console.log("Get stats")
+        // Calculate stats from events
+        const sampleCount = allSamples.length
+        const totalPurchases = allPurchases.length
+
+        // Sum up total volume and platform fees
+        let totalVolume = BigInt(0)
+        let platformFeeCollected = BigInt(0)
+
+        for (const purchase of allPurchases) {
+          totalVolume += BigInt(purchase.price)
+          platformFeeCollected += BigInt(purchase.platform_fee)
+        }
+
+        const stats: MarketplaceStats = {
+          sampleCount,
+          totalVolume: totalVolume.toString(),
+          totalVolumeInCspr: motesToCspr(totalVolume),
+          platformFeeCollected: platformFeeCollected.toString(),
+          platformFeeInCspr: motesToCspr(platformFeeCollected),
+          totalPurchases,
+        }
+
+        console.log("Marketplace stats:", stats)
         return stats
       } catch (error) {
         console.error("Error fetching stats:", error)
@@ -845,6 +930,7 @@ export const useGetStats = () => {
     },
     queryKey: ["stats"],
     enabled: !!CONTRACT_HASH,
+    staleTime: 60000, // Cache for 1 minute
   })
 }
 
@@ -888,19 +974,53 @@ export const useGetUserEarnings = () => {
 }
 
 export const useWithdrawEarnings = () => {
-  const { account } = useCasperWallet()
+  const { account, signDeploy } = useCasperWallet()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (): Promise<{ deployHash: string }> => {
-      if (!account?.address) {
+      if (!account) {
         throw new Error("Please connect your wallet first")
       }
 
-      // Placeholder - requires contract deployment
-      throw new Error("Contract not yet deployed. Please deploy the contract first and update PUBLIC_VITE_CONTRACT_HASH in .env")
+      if (!CONTRACT_HASH) {
+        throw new Error("Contract hash not configured")
+      }
+
+      // Build arguments for withdraw_earnings entry point (no arguments needed)
+      const args = RuntimeArgs.fromMap({})
+
+      // Build the deploy
+      const deploy = buildContractCallDeploy(
+        account.publicKey,
+        "withdraw_earnings",
+        args,
+        GAS_WITHDRAW_EARNINGS
+      )
+
+      // Convert deploy to JSON for signing
+      const deployJson = JSON.stringify(DeployUtil.deployToJson(deploy))
+
+      // Sign the deploy using the wallet
+      const signedDeployJson = await signDeploy(deployJson)
+
+      // Send the signed deploy to the network
+      const deployHash = await sendDeploy(signedDeployJson)
+
+      console.log("Withdraw earnings deploy submitted:", deployHash)
+
+      // Wait for the deploy to be executed
+      await waitForDeploy(deployHash)
+
+      console.log("Withdraw earnings deploy executed successfully:", deployHash)
+
+      return { deployHash }
     },
     onSuccess: () => {
+      toast.success("Earnings withdrawn!", {
+        description: "Your earnings have been transferred to your wallet.",
+        duration: 5000,
+      })
       queryClient.invalidateQueries({ queryKey: ["user-earnings", account?.address] })
     },
     onError: (error: Error) => {
@@ -916,22 +1036,61 @@ export const useWithdrawEarnings = () => {
 
 
 export const useUpdatePrice = () => {
-  const { account } = useCasperWallet()
+  const { account, signDeploy } = useCasperWallet()
   const queryClient = useQueryClient()
 
   return useMutation({
-    // @ts-ignore
-    mutationFn: async ({ sampleId, newPrice }: { sampleId: string; newPrice: number }) => {
-      if (!account?.address) {
+    mutationFn: async ({ sampleId, newPrice }: { sampleId: string; newPrice: string }): Promise<{ deployHash: string; sampleId: string }> => {
+      if (!account) {
         throw new Error("Please connect your wallet first")
       }
 
-      // Placeholder - requires contract deployment
-      throw new Error("Contract not yet deployed. Please deploy the contract first and update PUBLIC_VITE_CONTRACT_HASH in .env")
+      if (!CONTRACT_HASH) {
+        throw new Error("Contract hash not configured")
+      }
+
+      const sampleIdNum = parseInt(sampleId, 10)
+
+      // Build arguments for update_price entry point
+      const args = RuntimeArgs.fromMap({
+        sample_id: CLValueBuilder.u64(sampleIdNum),
+        new_price: CLValueBuilder.u512(newPrice),
+      })
+
+      // Build the deploy
+      const deploy = buildContractCallDeploy(
+        account.publicKey,
+        "update_price",
+        args,
+        GAS_UPDATE_PRICE
+      )
+
+      // Convert deploy to JSON for signing
+      const deployJson = JSON.stringify(DeployUtil.deployToJson(deploy))
+
+      // Sign the deploy using the wallet
+      const signedDeployJson = await signDeploy(deployJson)
+
+      // Send the signed deploy to the network
+      const deployHash = await sendDeploy(signedDeployJson)
+
+      console.log("Update price deploy submitted:", deployHash)
+
+      // Wait for the deploy to be executed
+      await waitForDeploy(deployHash)
+
+      console.log("Update price deploy executed successfully:", deployHash)
+
+      return { deployHash, sampleId }
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["single-sample", (data as { sampleId: string }).sampleId] })
+      toast.success("Price updated!", {
+        description: "Your sample price has been updated.",
+        duration: 5000,
+      })
+      queryClient.invalidateQueries({ queryKey: ["single-sample", data.sampleId] })
       queryClient.invalidateQueries({ queryKey: ["user-samples", account?.address] })
+      queryClient.invalidateQueries({ queryKey: ["all-samples"] })
     },
     onError: (error: Error) => {
       toast.error("Error", {
@@ -945,20 +1104,58 @@ export const useUpdatePrice = () => {
 }
 
 export const useDeactivateSample = () => {
-  const { account } = useCasperWallet()
+  const { account, signDeploy } = useCasperWallet()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (_sampleId: string) => {
-      if (!account?.address) {
+    mutationFn: async (sampleId: string): Promise<{ deployHash: string; sampleId: string }> => {
+      if (!account) {
         throw new Error("Please connect your wallet first")
       }
 
-      // Placeholder - requires contract deployment
-      throw new Error("Contract not yet deployed. Please deploy the contract first and update PUBLIC_VITE_CONTRACT_HASH in .env")
+      if (!CONTRACT_HASH) {
+        throw new Error("Contract hash not configured")
+      }
+
+      const sampleIdNum = parseInt(sampleId, 10)
+
+      // Build arguments for deactivate_sample entry point
+      const args = RuntimeArgs.fromMap({
+        sample_id: CLValueBuilder.u64(sampleIdNum),
+      })
+
+      // Build the deploy
+      const deploy = buildContractCallDeploy(
+        account.publicKey,
+        "deactivate_sample",
+        args,
+        GAS_DEACTIVATE_SAMPLE
+      )
+
+      // Convert deploy to JSON for signing
+      const deployJson = JSON.stringify(DeployUtil.deployToJson(deploy))
+
+      // Sign the deploy using the wallet
+      const signedDeployJson = await signDeploy(deployJson)
+
+      // Send the signed deploy to the network
+      const deployHash = await sendDeploy(signedDeployJson)
+
+      console.log("Deactivate sample deploy submitted:", deployHash)
+
+      // Wait for the deploy to be executed
+      await waitForDeploy(deployHash)
+
+      console.log("Deactivate sample deploy executed successfully:", deployHash)
+
+      return { deployHash, sampleId }
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["single-sample", (data as { sampleId: string }).sampleId] })
+      toast.success("Sample deactivated!", {
+        description: "Your sample has been removed from the marketplace.",
+        duration: 5000,
+      })
+      queryClient.invalidateQueries({ queryKey: ["single-sample", data.sampleId] })
       queryClient.invalidateQueries({ queryKey: ["user-samples", account?.address] })
       queryClient.invalidateQueries({ queryKey: ["all-samples"] })
     },
