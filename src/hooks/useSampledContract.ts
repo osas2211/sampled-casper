@@ -308,6 +308,112 @@ const getEventsCount = async (): Promise<number> => {
   }
 }
 
+/** Purchase record parsed from event */
+interface ParsedPurchase {
+  sample_id: string
+  buyer: string
+  seller: string
+  price: string
+  platform_fee: string
+  timestamp: string
+}
+
+/** Parse a SamplePurchased event from raw bytes */
+const parseSamplePurchasedEvent = (bytes: number[]): ParsedPurchase | null => {
+  try {
+    let offset = 0
+
+    // Read event name length (u32 little-endian)
+    const nameLen = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 4
+
+    // Read event name
+    const eventName = String.fromCharCode(...bytes.slice(offset, offset + nameLen))
+    offset += nameLen
+
+    // Check if this is a SamplePurchased event
+    if (eventName !== "event_SamplePurchased") {
+      return null
+    }
+
+    // Read sample_id (u64 little-endian)
+    const sampleId = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 8
+
+    // Read buyer (Key type: 1 byte type tag + 32 bytes hash)
+    offset += 1 // Skip type tag
+    const buyerBytes = bytes.slice(offset, offset + 32)
+    const buyer = Array.from(buyerBytes).map(b => b.toString(16).padStart(2, '0')).join('')
+    offset += 32
+
+    // Read seller (Key type: 1 byte type tag + 32 bytes hash)
+    offset += 1 // Skip type tag
+    const sellerBytes = bytes.slice(offset, offset + 32)
+    const seller = Array.from(sellerBytes).map(b => b.toString(16).padStart(2, '0')).join('')
+    offset += 32
+
+    // Read price (U512: 1 byte length + value bytes)
+    const priceLen = bytes[offset]
+    offset += 1
+    let price = BigInt(0)
+    for (let i = 0; i < priceLen; i++) {
+      price += BigInt(bytes[offset + i]) << BigInt(i * 8)
+    }
+    offset += priceLen
+
+    // Read platform_fee (U512: 1 byte length + value bytes)
+    const feeLen = bytes[offset]
+    offset += 1
+    let platformFee = BigInt(0)
+    for (let i = 0; i < feeLen; i++) {
+      platformFee += BigInt(bytes[offset + i]) << BigInt(i * 8)
+    }
+    offset += feeLen
+
+    // Read timestamp (u64)
+    const timestamp = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+
+    return {
+      sample_id: String(sampleId),
+      buyer,
+      seller,
+      price: price.toString(),
+      platform_fee: platformFee.toString(),
+      timestamp: String(timestamp),
+    }
+  } catch (error) {
+    console.error("Error parsing SamplePurchased event:", error)
+    return null
+  }
+}
+
+/** Fetch all purchase events */
+const fetchAllPurchases = async (): Promise<ParsedPurchase[]> => {
+  const purchases: ParsedPurchase[] = []
+
+  try {
+    const eventsCount = await getEventsCount()
+
+    for (let i = 0; i < eventsCount; i++) {
+      try {
+        const eventBytes = await queryEvent(i)
+        if (eventBytes) {
+          const purchase = parseSamplePurchasedEvent(eventBytes)
+          if (purchase) {
+            purchases.push(purchase)
+          }
+        }
+      } catch (error) {
+        // Skip events that fail to parse
+      }
+    }
+  } catch (error) {
+    console.error("Error fetching purchases:", error)
+  }
+
+  return purchases
+}
+
 /** Parse a SampleUploaded event from raw bytes */
 const parseSampleUploadedEvent = (bytes: number[]): ISample | null => {
   try {
@@ -441,6 +547,18 @@ const fetchAllSamples = async (): Promise<ISample[]> => {
   return samples
 }
 
+/** Get account hash from public key hex */
+const getAccountHashFromPublicKey = (publicKeyHex: string): string => {
+  try {
+    const publicKey = CLPublicKey.fromHex(publicKeyHex)
+    const accountHash = Buffer.from(publicKey.toAccountHash()).toString("hex")
+    return accountHash.toLowerCase()
+  } catch (error) {
+    console.error("Error getting account hash:", error)
+    return ""
+  }
+}
+
 export const useUploadSample = () => {
   const { account, signDeploy } = useCasperWallet()
   const queryClient = useQueryClient()
@@ -526,14 +644,20 @@ export const useGetUserSamples = () => {
       if (!account || !CONTRACT_HASH) return []
 
       try {
-        // Query user's uploaded samples from contract state
-        const samples = await queryContractState<ISample[]>(
-          CONTRACT_HASH,
-          `user_uploaded_samples_${account.address}`
+        // Get user's account hash for comparison
+        const userAccountHash = getAccountHashFromPublicKey(account.address)
+        if (!userAccountHash) return []
+
+        // Fetch all samples from events
+        const allSamples = await fetchAllSamples()
+
+        // Filter samples by seller (user's account hash)
+        const userSamples = allSamples.filter(
+          sample => sample.seller.toLowerCase() === userAccountHash
         )
 
-        console.log("Get user samples for:", account.address)
-        return samples || []
+        console.log("Get user samples for:", account.address, "Found:", userSamples.length)
+        return userSamples
       } catch (error) {
         console.error("Error fetching user samples:", error)
         return []
@@ -572,16 +696,17 @@ export const useGetAllSamples = () => {
 export const useGetSample = (sample_id: string) => {
   return useQuery({
     queryFn: async (): Promise<ISample | null> => {
-      if (!CONTRACT_HASH) return null
+      if (!CONTRACT_HASH || !sample_id) return null
 
       try {
-        const sample = await queryContractState<ISample>(
-          CONTRACT_HASH,
-          `sample_${sample_id}`
-        )
+        // Fetch all samples from events
+        const allSamples = await fetchAllSamples()
 
-        console.log("Get sample:", sample_id)
-        return sample
+        // Find the sample with matching ID
+        const sample = allSamples.find(s => s.sample_id === sample_id)
+
+        console.log("Get sample:", sample_id, sample ? "Found" : "Not found")
+        return sample || null
       } catch (error) {
         console.error("Error fetching sample:", error)
         return null
@@ -635,12 +760,20 @@ export const useHasPurchased = (sampleId: string) => {
       if (!account?.address || !sampleId || !CONTRACT_HASH) return false
 
       try {
-        const purchaseRecord = await queryContractState(
-          CONTRACT_HASH,
-          `purchase_${account.address}_${sampleId}`
+        // Get user's account hash for comparison
+        const userAccountHash = getAccountHashFromPublicKey(account.address)
+        if (!userAccountHash) return false
+
+        // Fetch all purchases and check if user has purchased this sample
+        const allPurchases = await fetchAllPurchases()
+        const hasPurchased = allPurchases.some(
+          purchase =>
+            purchase.buyer.toLowerCase() === userAccountHash &&
+            purchase.sample_id === sampleId
         )
 
-        return purchaseRecord !== null
+        console.log("Has purchased check:", sampleId, hasPurchased)
+        return hasPurchased
       } catch (error) {
         console.error("Error checking purchase status:", error)
         return false
@@ -658,13 +791,30 @@ export const useGetUserPurchases = () => {
       if (!account?.address || !CONTRACT_HASH) return []
 
       try {
-        const samples = await queryContractState<ISample[]>(
-          CONTRACT_HASH,
-          `user_purchased_samples_${account.address}`
+        // Get user's account hash for comparison
+        const userAccountHash = getAccountHashFromPublicKey(account.address)
+        if (!userAccountHash) return []
+
+        // Fetch all purchases where user is the buyer
+        const allPurchases = await fetchAllPurchases()
+        const userPurchases = allPurchases.filter(
+          purchase => purchase.buyer.toLowerCase() === userAccountHash
         )
 
-        console.log("Get user purchases for:", account.address)
-        return samples || []
+        if (userPurchases.length === 0) {
+          console.log("No purchases found for:", account.address)
+          return []
+        }
+
+        // Fetch all samples and filter to only include purchased ones
+        const allSamples = await fetchAllSamples()
+        const purchasedSampleIds = new Set(userPurchases.map(p => p.sample_id))
+        const purchasedSamples = allSamples.filter(
+          sample => purchasedSampleIds.has(sample.sample_id)
+        )
+
+        console.log("Get user purchases for:", account.address, "Found:", purchasedSamples.length)
+        return purchasedSamples
       } catch (error) {
         console.error("Error fetching user purchases:", error)
         return []
@@ -706,13 +856,27 @@ export const useGetUserEarnings = () => {
       if (!account?.address || !CONTRACT_HASH) return 0
 
       try {
-        const earnings = await queryContractState<string>(
-          CONTRACT_HASH,
-          `user_earnings_${account.address}`
+        // Get user's account hash for comparison
+        const userAccountHash = getAccountHashFromPublicKey(account.address)
+        if (!userAccountHash) return 0
+
+        // Fetch all purchases where user is the seller
+        const allPurchases = await fetchAllPurchases()
+        const userSales = allPurchases.filter(
+          purchase => purchase.seller.toLowerCase() === userAccountHash
         )
 
-        console.log("Get user earnings for:", account.address)
-        return earnings ? motesToCspr(BigInt(earnings)) : 0
+        // Sum up earnings (price - platform_fee for each sale)
+        let totalEarnings = BigInt(0)
+        for (const sale of userSales) {
+          const price = BigInt(sale.price)
+          const fee = BigInt(sale.platform_fee)
+          totalEarnings += price - fee
+        }
+
+        const earningsInCspr = motesToCspr(totalEarnings)
+        console.log("Get user earnings for:", account.address, "Total:", earningsInCspr, "CSPR from", userSales.length, "sales")
+        return earningsInCspr
       } catch (error) {
         console.error("Error fetching user earnings:", error)
         return 0
