@@ -729,7 +729,7 @@ export const useGetUserSamples = () => {
         // Filter samples by seller (user's account hash)
         const userSamples = allSamples.filter(
           sample => sample.seller.toLowerCase() === userAccountHash
-        )
+        ).sort((a, b) => Number(b.sample_id) - Number(a.sample_id))
 
         console.log("Get user samples for:", account.address, "Found:", userSamples.length)
         return userSamples
@@ -755,7 +755,7 @@ export const useGetAllSamples = () => {
         console.log("Fetching all samples from contract:", CONTRACT_HASH)
         const samples = await fetchAllSamples()
         console.log("Fetched samples:", samples.length)
-        return samples
+        return samples.sort((a, b) => Number(b.sample_id) - Number(a.sample_id))
       } catch (error) {
         console.error("Error fetching all samples:", error)
         return []
