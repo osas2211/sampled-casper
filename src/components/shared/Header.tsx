@@ -21,7 +21,7 @@ const routes = [
   },
   {
     label: "Docs",
-    route: "https://github.com/osas2211/sampled",
+    route: "https://github.com/osas2211/sampled-casper",
     target: "_blank",
   },
 ];
