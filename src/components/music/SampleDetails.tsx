@@ -13,7 +13,7 @@ export const SampleDetails = () => {
           <CiClock2 className="text-white" size={20} />
           <p>Contract Created</p>
         </div>
-        <div className="font-semibold">10 November, 2025</div>
+        <div className="font-semibold">December, 2025</div>
       </div>
       <div className="flex items-center gap-4 justify-between p-4 py-3 rounded-lg bg-grey-700">
         <div className="flex items-center gap-2">
