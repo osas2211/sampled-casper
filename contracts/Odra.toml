@@ -5,6 +5,9 @@ version = "1.0.0"
 [[contracts]]
 fqn = "sampled_contracts::SampledMarketplace"
 
+[[contracts]]
+fqn = "sampled_contracts::LicenseNft"
+
 [network.casper-testnet]
 chain-name = "casper-test"
 rpc-url = "https://rpc.testnet.casperlabs.io/rpc"

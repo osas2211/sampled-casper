@@ -35,4 +35,33 @@ pub enum Error {
     Unauthorized = 14,
     /// Transfer failed
     TransferFailed = 15,
+
+    // ============================================
+    // License NFT Errors (20-39)
+    // ============================================
+
+    /// License with given ID was not found
+    LicenseNotFound = 20,
+    /// Caller is not the owner of this license
+    NotLicenseOwner = 21,
+    /// Invalid license type provided
+    InvalidLicenseType = 22,
+    /// Sample already has an exclusive license
+    SampleExclusivelyLicensed = 23,
+    /// User already has this type of license for this sample
+    AlreadyHasLicenseType = 24,
+    /// Insufficient payment for royalties on transfer
+    InsufficientRoyaltyPayment = 25,
+    /// Exclusive licenses cannot be transferred
+    CannotTransferExclusiveLicense = 26,
+    /// No royalties available to withdraw
+    NoRoyaltiesToWithdraw = 27,
+    /// Invalid pricing multiplier (must be > 0)
+    InvalidPricingMultiplier = 28,
+    /// License is not active
+    LicenseInactive = 29,
+    /// Cannot purchase license for own sample
+    CannotPurchaseOwnSample = 30,
+    /// License NFT contract not set
+    LicenseContractNotSet = 31,
 }

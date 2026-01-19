@@ -21,8 +21,6 @@ test = false
 [dependencies]
 odra = "2.4"
 odra-modules = "2.4"
-casper-contract = "4.0"
-casper-types = "4.0"
 
 [build-dependencies]
 odra-build = "2.4"

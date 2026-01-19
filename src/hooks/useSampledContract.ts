@@ -2,6 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ISample, IUploadSamplePayload } from "../@types/sample"
+import {
+  LicenseType,
+  IAllLicensePrices,
+  ILicensePricing,
+  DEFAULT_LICENSE_PRICING,
+  IPurchaseLicensePayload,
+} from "../@types/license"
 import { toast } from "sonner"
 import { IoCloseCircleSharp } from "react-icons/io5"
 import { useCasperWallet } from "../providers/WalletProvider"
@@ -30,6 +37,8 @@ const GAS_PURCHASE_SAMPLE = "25000000000" // 25 CSPR (includes proxy caller + tr
 const GAS_WITHDRAW_EARNINGS = "5000000000" // 5 CSPR
 const GAS_UPDATE_PRICE = "3000000000" // 3 CSPR
 const GAS_DEACTIVATE_SAMPLE = "3000000000" // 3 CSPR
+const GAS_PURCHASE_LICENSE = "30000000000" // 30 CSPR (higher for license minting)
+const GAS_SET_LICENSE_PRICING = "3000000000" // 3 CSPR
 
 // Default TTL for deploys (30 minutes)
 const DEFAULT_TTL = 1800000
@@ -1235,6 +1244,241 @@ export const useDeactivateSample = () => {
       toast.error("Error", {
         className: "!bg-red-500 *:!text-white !border-0",
         description: error.message || "Failed to deactivate sample",
+        duration: 5000,
+        icon: IoCloseCircleSharp({ size: 24 }),
+      })
+    },
+  })
+}
+
+// ============================================
+// License System Hooks
+// ============================================
+
+export interface IPurchaseLicenseResponse {
+  transactionHash: string
+  sample_id: string
+  license_type: LicenseType
+}
+
+/**
+ * Calculate the license price based on base price and license type
+ */
+export const calculateLicensePrice = (
+  basePrice: string,
+  licenseType: LicenseType,
+  pricing?: ILicensePricing
+): string => {
+  const p = pricing || DEFAULT_LICENSE_PRICING
+  let multiplier: string
+
+  switch (licenseType) {
+    case LicenseType.Personal:
+      multiplier = p.personal_multiplier
+      break
+    case LicenseType.Commercial:
+      multiplier = p.commercial_multiplier
+      break
+    case LicenseType.Broadcast:
+      multiplier = p.broadcast_multiplier
+      break
+    case LicenseType.Exclusive:
+      multiplier = p.exclusive_multiplier
+      break
+    default:
+      multiplier = "100"
+  }
+
+  const basePriceBigInt = BigInt(basePrice)
+  const multiplierBigInt = BigInt(multiplier)
+  const price = (basePriceBigInt * multiplierBigInt) / 100n
+  return price.toString()
+}
+
+/**
+ * Get all license prices for a sample
+ */
+export const getAllLicensePrices = (
+  basePrice: string,
+  pricing?: ILicensePricing
+): IAllLicensePrices => {
+  return {
+    personal: calculateLicensePrice(basePrice, LicenseType.Personal, pricing),
+    commercial: calculateLicensePrice(basePrice, LicenseType.Commercial, pricing),
+    broadcast: calculateLicensePrice(basePrice, LicenseType.Broadcast, pricing),
+    exclusive: calculateLicensePrice(basePrice, LicenseType.Exclusive, pricing),
+  }
+}
+
+/**
+ * Hook to purchase a sample license (mints a License NFT)
+ */
+export const usePurchaseSampleLicense = () => {
+  const { account, signDeploy } = useCasperWallet()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (payload: IPurchaseLicensePayload): Promise<IPurchaseLicenseResponse> => {
+      if (!account) {
+        throw new Error("Please connect your wallet first")
+      }
+
+      if (!CONTRACT_HASH) {
+        throw new Error("Contract hash not configured")
+      }
+
+      const { sample_id, license_type } = payload
+
+      // First, get the sample to calculate the license price
+      const allSamples = await fetchAllSamples()
+      const sample = allSamples.find(s => s.sample_id === String(sample_id))
+      if (!sample) {
+        throw new Error("Sample not found")
+      }
+
+      // Calculate license price (using default pricing for now)
+      const licensePrice = calculateLicensePrice(sample.price, license_type)
+
+      // Build arguments for purchase_sample_license entry point
+      const args = RuntimeArgs.fromMap({
+        sample_id: CLValueBuilder.u64(sample_id),
+        license_type: CLValueBuilder.u8(license_type),
+      })
+
+      // Build the deploy using proxy_caller for payable function
+      const deploy = await buildPayableContractCallDeploy(
+        account.publicKey,
+        "purchase_sample_license",
+        args,
+        licensePrice, // attached_value - the CSPR to send
+        GAS_PURCHASE_LICENSE
+      )
+
+      // Convert deploy to JSON for signing
+      const deployJson = JSON.stringify(DeployUtil.deployToJson(deploy))
+
+      // Sign the deploy using the wallet
+      const signedDeployJson = await signDeploy(deployJson)
+
+      // Send the signed deploy to the network
+      const deployHash = await sendDeploy(signedDeployJson)
+
+      console.log("License purchase deploy submitted:", deployHash)
+
+      // Wait for the deploy to be executed
+      await waitForDeploy(deployHash)
+
+      console.log("License purchase deploy executed successfully:", deployHash)
+
+      return {
+        transactionHash: deployHash,
+        sample_id: String(sample_id),
+        license_type,
+      }
+    },
+    onSuccess: (data) => {
+      const licenseTypeName = ["Personal", "Commercial", "Broadcast", "Exclusive"][data.license_type]
+      console.log("License purchase successful:", data)
+      toast.success("License purchased!", {
+        description: `You now have a ${licenseTypeName} license for this sample.`,
+        duration: 5000,
+      })
+
+      // Invalidate relevant queries
+      queryClient.invalidateQueries({ queryKey: ["user-purchases", account?.address] })
+      queryClient.invalidateQueries({ queryKey: ["user-licenses", account?.address] })
+      queryClient.invalidateQueries({ queryKey: ["user-earnings"] })
+      queryClient.invalidateQueries({ queryKey: ["hasPurchased", account?.address, data.sample_id] })
+      queryClient.invalidateQueries({ queryKey: ["single-sample", data.sample_id] })
+      queryClient.invalidateQueries({ queryKey: ["all-samples"] })
+      queryClient.invalidateQueries({ queryKey: ["stats"] })
+      queryClient.invalidateQueries({ queryKey: ["sample-license-info", data.sample_id] })
+    },
+    onError: (error: Error) => {
+      console.log(error)
+      toast.error("Error", {
+        className: "!bg-red-500 *:!text-white !border-0",
+        description: error.message || "Failed to purchase license",
+        duration: 5000,
+        icon: IoCloseCircleSharp({ size: 24 }),
+      })
+    },
+  })
+}
+
+/**
+ * Hook to set custom license pricing for a sample (seller only)
+ */
+export const useSetLicensePricing = () => {
+  const { account, signDeploy } = useCasperWallet()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (params: {
+      sampleId: string
+      personalMult: number
+      commercialMult: number
+      broadcastMult: number
+      exclusiveMult: number
+    }): Promise<{ deployHash: string; sampleId: string }> => {
+      if (!account) {
+        throw new Error("Please connect your wallet first")
+      }
+
+      if (!CONTRACT_HASH) {
+        throw new Error("Contract hash not configured")
+      }
+
+      const { sampleId, personalMult, commercialMult, broadcastMult, exclusiveMult } = params
+      const sampleIdNum = parseInt(sampleId, 10)
+
+      // Build arguments for set_license_pricing entry point
+      const args = RuntimeArgs.fromMap({
+        sample_id: CLValueBuilder.u64(sampleIdNum),
+        personal_mult: CLValueBuilder.u64(personalMult),
+        commercial_mult: CLValueBuilder.u64(commercialMult),
+        broadcast_mult: CLValueBuilder.u64(broadcastMult),
+        exclusive_mult: CLValueBuilder.u64(exclusiveMult),
+      })
+
+      // Build the deploy
+      const deploy = buildContractCallDeploy(
+        account.publicKey,
+        "set_license_pricing",
+        args,
+        GAS_SET_LICENSE_PRICING
+      )
+
+      // Convert deploy to JSON for signing
+      const deployJson = JSON.stringify(DeployUtil.deployToJson(deploy))
+
+      // Sign the deploy using the wallet
+      const signedDeployJson = await signDeploy(deployJson)
+
+      // Send the signed deploy to the network
+      const deployHash = await sendDeploy(signedDeployJson)
+
+      console.log("Set license pricing deploy submitted:", deployHash)
+
+      // Wait for the deploy to be executed
+      await waitForDeploy(deployHash)
+
+      console.log("Set license pricing deploy executed successfully:", deployHash)
+
+      return { deployHash, sampleId }
+    },
+    onSuccess: (data) => {
+      toast.success("License pricing updated!", {
+        description: "Your custom license prices are now active.",
+        duration: 5000,
+      })
+      queryClient.invalidateQueries({ queryKey: ["single-sample", data.sampleId] })
+      queryClient.invalidateQueries({ queryKey: ["license-pricing", data.sampleId] })
+    },
+    onError: (error: Error) => {
+      toast.error("Error", {
+        className: "!bg-red-500 *:!text-white !border-0",
+        description: error.message || "Failed to update license pricing",
         duration: 5000,
         icon: IoCloseCircleSharp({ size: 24 }),
       })
