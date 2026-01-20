@@ -2,10 +2,13 @@
 import { useState } from "react";
 import { PiMusicNotesPlusFill } from "react-icons/pi";
 import { RiHeart2Fill } from "react-icons/ri";
+import { HiOutlineDocumentText } from "react-icons/hi";
 import { SampleList } from "./SampleList";
+import { LicenseList } from "./LicenseList";
 import {
   useGetUserPurchases,
   useGetUserSamples,
+  useGetUserLicenses,
 } from "../../hooks/useSampledContract";
 
 export const UserProfileTabs = () => {
@@ -13,6 +16,7 @@ export const UserProfileTabs = () => {
   const { isLoading, data } = useGetUserPurchases();
   const { isLoading: loadingUserSamples, data: user_samples } =
     useGetUserSamples();
+  const { isLoading: loadingLicenses, data: licenses } = useGetUserLicenses();
   console.log(user_samples, "samples")
 
   const items = [
@@ -33,6 +37,13 @@ export const UserProfileTabs = () => {
         <SampleList title={""} data={data || []} isLoading={isLoading} />
       ),
       icon: <RiHeart2Fill size={19} />,
+    },
+    {
+      title: "My Licenses",
+      content: (
+        <LicenseList licenses={licenses || []} isLoading={loadingLicenses} />
+      ),
+      icon: <HiOutlineDocumentText size={19} />,
     },
   ];
   return (

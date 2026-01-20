@@ -85,7 +85,7 @@ export const LicenseSelector = ({
                 <Card
                   className={`
                     cursor-pointer transition-all duration-200
-                    ${isSelected ? "!border-primary !bg-primary/10" : "!border-gray-700 !bg-gray-800/50"}
+                    ${isSelected ? "!border-primary !bg-primary/10" : "!border-gray-1000/10 !bg-gray-1000/50"}
                     ${isDisabled ? "opacity-50 cursor-not-allowed" : "hover:!border-gray-500"}
                   `}
                   bodyStyle={{ padding: "16px" }}

@@ -26,10 +26,16 @@ const CASPER_RPC_URL = "/api/rpc"
 const CHAIN_NAME = import.meta.env.PUBLIC_VITE_CASPER_CHAIN_NAME || "casper-test"
 const CONTRACT_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_HASH || ""
 const CONTRACT_PACKAGE_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_PACKAGE_HASH || ""
+const LICENSE_NFT_CONTRACT_HASH = import.meta.env.PUBLIC_VITE_LICENSE_NFT_CONTRACT_HASH || ""
+const LICENSE_NFT_PACKAGE_HASH = import.meta.env.PUBLIC_VITE_LICENSE_NFT_PACKAGE_HASH || ""
 
-// Odra contract URefs (from contract named_keys)
-const EVENTS_UREF = "uref-cd62b44c88370b693d10df5dd27148659078947b762965ae43916f76a14016f3-007"
-const EVENTS_LENGTH_UREF = "uref-963907b815a26a008ab24f0a144eb8dee0cf5aca2b75de0e9be9d98b66333014-007"
+// Odra contract URefs (from contract named_keys - updated for v2 contracts)
+// Marketplace events
+const EVENTS_UREF = "uref-401bbd570e3a80d6fe08adf632818be197eecea487d07d9fbe106259d86e9e10-007"
+const EVENTS_LENGTH_UREF = "uref-18bd41f2b3d955af1a52ea2738772c23c3b5e1f7fb7c033971a75e831de0ab02-007"
+// LicenseNft events
+const LICENSE_NFT_EVENTS_UREF = "uref-40b8b7b21329bcaa543f3d2a65187e38307d8b6c65439f9f39d6c783780c6592-007"
+const LICENSE_NFT_EVENTS_LENGTH_UREF = "uref-0d920a1aa351349f3d0b8ff8841478300a7f830ed3a2c7b44f6feaea5b99d33e-007"
 
 // Gas costs (in motes - 1 CSPR = 10^9 motes)
 const GAS_UPLOAD_SAMPLE = "10000000000" // 10 CSPR
@@ -123,8 +129,25 @@ export interface IPurchaseSampleResponse {
 
 /** Convert motes (smallest unit) to CSPR tokens (1 CSPR = 1,000,000,000 motes) */
 export const motesToCspr = (motes: bigint | string | number): number => {
-  const amount = typeof motes === "bigint" ? motes : BigInt(motes || 0)
-  return Number(amount) / 1_000_000_000
+  if (typeof motes === "bigint") {
+    return Number(motes) / 1_000_000_000
+  }
+  if (typeof motes === "number") {
+    // If it's already a decimal, it might already be in CSPR or needs flooring for BigInt
+    if (!Number.isInteger(motes)) {
+      // Already a decimal - assume it's motes as a float, convert directly
+      return motes / 1_000_000_000
+    }
+    return motes / 1_000_000_000
+  }
+  // String - try to parse as BigInt
+  try {
+    const amount = BigInt(motes || 0)
+    return Number(amount) / 1_000_000_000
+  } catch {
+    // If BigInt fails, parse as float
+    return (parseFloat(motes) || 0) / 1_000_000_000
+  }
 }
 
 /** Convert CSPR to motes */
@@ -1483,5 +1506,208 @@ export const useSetLicensePricing = () => {
         icon: IoCloseCircleSharp({ size: 24 }),
       })
     },
+  })
+}
+
+// ============================================
+// License NFT Query Functions
+// ============================================
+
+/** Get the license NFT events count */
+const getLicenseNftEventsCount = async (): Promise<number> => {
+  try {
+    const stateRootHash = await getStateRootHash()
+
+    const result = await rpcCall<any>("query_global_state", [
+      { StateRootHash: stateRootHash },
+      LICENSE_NFT_EVENTS_LENGTH_UREF,
+      [],
+    ])
+
+    const count = result?.stored_value?.CLValue?.parsed
+    return typeof count === "number" ? count : parseInt(count || "0", 10)
+  } catch (error) {
+    console.log("License NFT events count query returned 0")
+    return 0
+  }
+}
+
+/** Query a single license NFT event by index */
+const queryLicenseNftEvent = async (index: number): Promise<number[] | null> => {
+  try {
+    const stateRootHash = await getStateRootHash()
+
+    const result = await rpcCall<any>("state_get_dictionary_item", [
+      stateRootHash,
+      {
+        URef: {
+          seed_uref: LICENSE_NFT_EVENTS_UREF,
+          dictionary_item_key: String(index),
+        },
+      },
+    ])
+
+    return result?.stored_value?.CLValue?.parsed || null
+  } catch (error) {
+    console.error(`Error querying license NFT event ${index}:`, error)
+    return null
+  }
+}
+
+/** Parsed license from LicenseMinted event */
+export interface ParsedLicense {
+  license_id: string
+  sample_id: string
+  license_type: number
+  buyer: string
+  creator: string
+  price: string
+  timestamp: string
+}
+
+/** Parse a LicenseMinted event from raw bytes */
+const parseLicenseMintedEvent = (bytes: number[]): ParsedLicense | null => {
+  try {
+    let offset = 0
+
+    // Read event name length (u32 little-endian)
+    const nameLen = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 4
+
+    // Read event name
+    const eventName = String.fromCharCode(...bytes.slice(offset, offset + nameLen))
+    offset += nameLen
+
+    // Check if this is a LicenseMinted event
+    if (eventName !== "event_LicenseMinted") {
+      return null
+    }
+
+    // Read license_id (u64 little-endian)
+    const licenseId = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 8
+
+    // Read sample_id (u64 little-endian)
+    const sampleId = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+    offset += 8
+
+    // Read license_type (u8)
+    const licenseType = bytes[offset]
+    offset += 1
+
+    // Read buyer (Key type: 1 byte type tag + 32 bytes hash)
+    offset += 1 // Skip type tag
+    const buyerBytes = bytes.slice(offset, offset + 32)
+    const buyer = Array.from(buyerBytes).map(b => b.toString(16).padStart(2, '0')).join('')
+    offset += 32
+
+    // Read creator (Key type: 1 byte type tag + 32 bytes hash)
+    offset += 1 // Skip type tag
+    const creatorBytes = bytes.slice(offset, offset + 32)
+    const creator = Array.from(creatorBytes).map(b => b.toString(16).padStart(2, '0')).join('')
+    offset += 32
+
+    // Read price (U512: 1 byte length + value bytes)
+    const priceLen = bytes[offset]
+    offset += 1
+    let price = BigInt(0)
+    for (let i = 0; i < priceLen; i++) {
+      price += BigInt(bytes[offset + i]) << BigInt(i * 8)
+    }
+    offset += priceLen
+
+    // Read timestamp (u64)
+    const timestamp = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)
+
+    return {
+      license_id: String(licenseId),
+      sample_id: String(sampleId),
+      license_type: licenseType,
+      buyer,
+      creator,
+      price: price.toString(),
+      timestamp: String(timestamp),
+    }
+  } catch (error) {
+    console.error("Error parsing LicenseMinted event:", error)
+    return null
+  }
+}
+
+/** Fetch all license minted events */
+const fetchAllLicenses = async (): Promise<ParsedLicense[]> => {
+  const licenses: ParsedLicense[] = []
+
+  try {
+    const eventsCount = await getLicenseNftEventsCount()
+    console.log("License NFT events count:", eventsCount)
+
+    for (let i = 0; i < eventsCount; i++) {
+      try {
+        const eventBytes = await queryLicenseNftEvent(i)
+        if (eventBytes) {
+          const license = parseLicenseMintedEvent(eventBytes)
+          if (license) {
+            licenses.push(license)
+          }
+        }
+      } catch (error) {
+        // Skip events that fail to parse
+      }
+    }
+  } catch (error) {
+    console.error("Error fetching licenses:", error)
+  }
+
+  return licenses
+}
+
+/**
+ * Hook to get all licenses owned by the current user
+ */
+export const useGetUserLicenses = () => {
+  const { account } = useCasperWallet()
+
+  return useQuery({
+    queryFn: async (): Promise<(ParsedLicense & { sample?: ISample })[]> => {
+      if (!account?.address || !LICENSE_NFT_CONTRACT_HASH) return []
+
+      try {
+        // Get user's account hash for comparison
+        const userAccountHash = getAccountHashFromPublicKey(account.address)
+        if (!userAccountHash) return []
+
+        // Fetch all licenses
+        const allLicenses = await fetchAllLicenses()
+
+        // Filter licenses owned by user
+        const userLicenses = allLicenses.filter(
+          license => license.buyer.toLowerCase() === userAccountHash
+        )
+
+        if (userLicenses.length === 0) {
+          console.log("No licenses found for:", account.address)
+          return []
+        }
+
+        // Fetch all samples to enrich license data
+        const allSamples = await fetchAllSamples()
+        const samplesMap = new Map(allSamples.map(s => [s.sample_id, s]))
+
+        // Enrich licenses with sample data
+        const enrichedLicenses = userLicenses.map(license => ({
+          ...license,
+          sample: samplesMap.get(license.sample_id),
+        }))
+
+        console.log("Get user licenses for:", account.address, "Found:", enrichedLicenses.length)
+        return enrichedLicenses.sort((a, b) => Number(b.license_id) - Number(a.license_id))
+      } catch (error) {
+        console.error("Error fetching user licenses:", error)
+        return []
+      }
+    },
+    queryKey: ["user-licenses", account?.address],
+    enabled: !!account?.address && !!LICENSE_NFT_CONTRACT_HASH,
   })
 }
