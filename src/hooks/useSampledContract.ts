@@ -27,7 +27,7 @@ const CHAIN_NAME = import.meta.env.PUBLIC_VITE_CASPER_CHAIN_NAME || "casper-test
 const CONTRACT_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_HASH || ""
 const CONTRACT_PACKAGE_HASH = import.meta.env.PUBLIC_VITE_CONTRACT_PACKAGE_HASH || ""
 const LICENSE_NFT_CONTRACT_HASH = import.meta.env.PUBLIC_VITE_LICENSE_NFT_CONTRACT_HASH || ""
-const LICENSE_NFT_PACKAGE_HASH = import.meta.env.PUBLIC_VITE_LICENSE_NFT_PACKAGE_HASH || ""
+// const LICENSE_NFT_PACKAGE_HASH = import.meta.env.PUBLIC_VITE_LICENSE_NFT_PACKAGE_HASH || ""
 
 // Odra contract URefs (from contract named_keys - updated for v2 contracts)
 // Marketplace events
